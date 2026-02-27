@@ -7,3 +7,5 @@ plotly
 jupyter
 pytest
 tqdm
+yfinance
+ipykernel

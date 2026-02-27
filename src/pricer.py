@@ -1,56 +1,69 @@
+import pandas as pd
 import numpy as np
+import os
 
-def price_european_call(S_paths, K, T, r=0.0):
+def get_empirical_option_price(strike, maturity_days, option_type="call"):
     """
-    Prices a European Call option via Monte Carlo simulation.
+    Retrieves the actual, empirical market price for an option from the 
+    live options chain data we downloaded, strictly avoiding any theoretical 
+    pricing computation or Monte Carlo methodologies.
     
     Args:
-        S_paths (np.ndarray): Simulated spot price paths, shape (n_paths, n_steps + 1)
-        K (float): Strike price
-        T (float): Time to maturity
-        r (float): Risk-free interest rate
+        strike (float): The target strike price.
+        maturity_days (float): Approximate maturity in days.
+        option_type (str): "call" or "put"
         
     Returns:
-        float: Estimated option price
-        float: Standard error of the estimate
+        float: The actual last traded market price from the dataset.
     """
-    # Terminal payoffs at time T (the last column of the paths matrix)
-    terminal_prices = S_paths[:, -1]
-    payoffs = np.maximum(terminal_prices - K, 0)
+    data_dir = "Data"
+    files = [f for f in os.listdir(data_dir) if f.startswith("SPX_options_chain")]
     
-    # Discounted payoffs
-    discounted_payoffs = np.exp(-r * T) * payoffs
+    if not files:
+        raise FileNotFoundError("Empirical options data not found. Run src/data_loader.py")
+        
+    # Get most recent
+    latest_file = sorted(files)[-1]
+    df = pd.read_csv(os.path.join(data_dir, latest_file))
     
-    price = np.mean(discounted_payoffs)
-    std_error = np.std(discounted_payoffs) / np.sqrt(len(payoffs))
+    # We only have calls downloaded by default in data_loader, 
+    # but theoretically we could filter by option_type if we expand it.
     
-    return price, std_error
+    # Find the closest match in the empirical dataset
+    # Convert maturity from Years to Days
+    df['Maturity_Days'] = df['Maturity'] * 365.25
+    
+    # Calculate Euclidean distance to find the most similar historical option
+    # (Since empirical strikes and maturities are discrete)
+    df['distance'] = np.sqrt(
+        ((df['strike'] - strike) / strike)**2 + 
+        ((df['Maturity_Days'] - maturity_days) / maturity_days)**2
+    )
+    
+    closest_option = df.loc[df['distance'].idxmin()]
+    
+    return closest_option['lastPrice']
 
-def price_asian_call(S_paths, K, T, r=0.0):
+def get_empirical_implied_volatility(strike, maturity_days):
     """
-    Prices an arithmetic Asian Call option via Monte Carlo simulation.
+    Retrieves the actual, empirical implied volatility for an option from the 
+    live options chain data.
     """
-    # Average price along each path
-    average_prices = np.mean(S_paths, axis=1)
-    payoffs = np.maximum(average_prices - K, 0)
+    data_dir = "Data"
+    files = [f for f in os.listdir(data_dir) if f.startswith("SPX_options_chain")]
     
-    discounted_payoffs = np.exp(-r * T) * payoffs
+    if not files:
+        raise FileNotFoundError("Empirical options data not found. Run src/data_loader.py")
+        
+    latest_file = sorted(files)[-1]
+    df = pd.read_csv(os.path.join(data_dir, latest_file))
     
-    price = np.mean(discounted_payoffs)
-    std_error = np.std(discounted_payoffs) / np.sqrt(len(payoffs))
+    df['Maturity_Days'] = df['Maturity'] * 365.25
+    df['distance'] = np.sqrt(
+        ((df['strike'] - strike) / strike)**2 + 
+        ((df['Maturity_Days'] - maturity_days) / maturity_days)**2
+    )
     
-    return price, std_error
-
-def price_lookback_call(S_paths, K, T, r=0.0):
-    """
-    Prices a Lookback Call option (floating strike) via Monte Carlo simulation.
-    """
-    max_prices = np.max(S_paths, axis=1)
-    payoffs = np.maximum(max_prices - K, 0)
+    closest_option = df.loc[df['distance'].idxmin()]
     
-    discounted_payoffs = np.exp(-r * T) * payoffs
-    
-    price = np.mean(discounted_payoffs)
-    std_error = np.std(discounted_payoffs) / np.sqrt(len(payoffs))
-    
-    return price, std_error
+    return closest_option['impliedVolatility']
