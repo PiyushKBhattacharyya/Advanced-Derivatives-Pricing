@@ -3,7 +3,7 @@ import pandas as pd
 from datetime import datetime
 import os
 
-def download_spx_options(data_dir="Data"):
+def download_spx_options(data_dir=None):
     """
     Extracts the live options chain for the S&P 500 (^SPX) index directly from Yahoo Finance API.
     This serves as the foundational empirical options dataset for training and benchmarking 
@@ -15,6 +15,10 @@ def download_spx_options(data_dir="Data"):
     Returns:
         str: Absolute or relative filepath of the generated CSV dataset.
     """
+    if data_dir is None:
+        BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        data_dir = os.path.join(BASE_DIR, "Data")
+        
     if not os.path.exists(data_dir):
         os.makedirs(data_dir)
         
@@ -72,4 +76,4 @@ def download_spx_options(data_dir="Data"):
     return filepath
 
 if __name__ == "__main__":
-    download_spx_options("../Data")
+    download_spx_options()

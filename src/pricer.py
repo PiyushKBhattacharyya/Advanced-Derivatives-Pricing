@@ -16,7 +16,8 @@ def get_empirical_option_price(strike, maturity_days, option_type="call"):
     Returns:
         float: The actual last traded market price from the dataset.
     """
-    data_dir = "Data"
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    data_dir = os.path.join(BASE_DIR, "Data")
     files = [f for f in os.listdir(data_dir) if f.startswith("SPX_options_chain")]
     
     if not files:
@@ -49,7 +50,8 @@ def get_empirical_implied_volatility(strike, maturity_days):
     Retrieves the actual, empirical implied volatility for an option from the 
     live options chain data.
     """
-    data_dir = "Data"
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    data_dir = os.path.join(BASE_DIR, "Data")
     files = [f for f in os.listdir(data_dir) if f.startswith("SPX_options_chain")]
     
     if not files:

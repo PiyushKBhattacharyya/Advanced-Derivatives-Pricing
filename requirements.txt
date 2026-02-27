@@ -9,4 +9,4 @@ pytest
 tqdm
 yfinance
 ipykernel
-dateutil
+scikit-learn

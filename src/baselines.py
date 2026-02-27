@@ -19,7 +19,8 @@ def get_empirical_dataset():
     Loads the empirical SPX Options Chain dataset downloaded by data_loader.py.
     Provides empirical Spot, Variance, Maturity, and Strike for DL training.
     """
-    data_dir = "Data"
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    data_dir = os.path.join(BASE_DIR, "Data")
     files = [f for f in os.listdir(data_dir) if f.startswith("SPX_options_chain")]
     
     if not files:
@@ -44,8 +45,9 @@ def extract_challenge_regime(regime='extreme_vol'):
     Slices the historical SPX/VIX dataset (from market_paths.py) to extract 
     specific, empirically challenging market regimes for benchmarking constraint testing.
     """
-    vix_path = os.path.join("Data", "VIX_history.csv")
-    spx_path = os.path.join("Data", "SPX_history.csv")
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    vix_path = os.path.join(BASE_DIR, "Data", "VIX_history.csv")
+    spx_path = os.path.join(BASE_DIR, "Data", "SPX_history.csv")
     
     if not os.path.exists(vix_path) or not os.path.exists(spx_path):
          raise FileNotFoundError("Historical prices not found. Run src/market_paths.py first.")

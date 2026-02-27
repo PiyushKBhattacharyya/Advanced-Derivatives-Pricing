@@ -10,7 +10,8 @@ def fetch_empirical_paths(period="5y"):
     This bypasses Monte Carlo simulation, addressing the curse of dimensionality 
     by training strictly on empirically realized market regimes.
     """
-    data_dir = "Data"
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    data_dir = os.path.join(BASE_DIR, "Data")
     if not os.path.exists(data_dir):
         os.makedirs(data_dir)
         
