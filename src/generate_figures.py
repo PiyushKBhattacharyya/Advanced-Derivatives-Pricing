@@ -34,7 +34,7 @@ plt.rcParams['font.family'] = 'serif' # Best for LaTeX papers
 plt.rcParams['font.size'] = 12
 
 # ==========================================
-# PHASE 1: Data Visualizations
+# Data Visualizations
 # ==========================================
 
 def plot_spx_vix_correlation():
@@ -138,7 +138,7 @@ def plot_volatility_smile():
     plt.close()
 
 # ==========================================
-# PHASE 2: Neural Net Visualizations
+# Neural Net Visualizations
 # ==========================================
 
 def plot_nn_architecture():
@@ -391,6 +391,74 @@ def plot_pricing_surfaces_3d():
     plt.savefig(os.path.join(FIGS_DIR, "pricing_surfaces_3d.png"), bbox_inches='tight')
     plt.close()
 
+# ==========================================
+# Validation & Empirical Hedging Implementation
+# ==========================================
+
+def plot_performance_benchmarks():
+    try:
+        metrics = np.load(os.path.join(BASE_DIR, "Data", "inference_metrics.npy"), allow_pickle=True).item()
+    except Exception as e:
+        print("Missing inference metrics:", e)
+        return
+        
+    fig, ax = plt.subplots(figsize=(7, 6), dpi=300)
+    ax.grid(True, axis='y', linestyle=':', color='#cccccc', zorder=0)
+    
+    names = list(metrics.keys())
+    values = list(metrics.values())
+    
+    throughput = [100000 / v for v in values]
+    
+    colors = ['#1f77b4', '#d62728']
+    bars = ax.bar(names, throughput, color=colors, edgecolor='black', zorder=3, width=0.5)
+    
+    ax.set_ylabel('Physical Throughput (Contracts / Second)', fontweight='bold')
+    ax.set_title('Inference Latency: Neural Weights vs Local Analytical CPUs', fontsize=12, fontweight='bold', pad=15)
+    ax.set_yscale('log')
+    
+    for bar in bars:
+        yval = bar.get_height()
+        ax.text(bar.get_x() + bar.get_width()/2, yval * 1.5, f'{int(yval):,}/sec', ha='center', va='bottom', fontweight='bold', size=11)
+        
+    plt.tight_layout()
+    plt.savefig(os.path.join(FIGS_DIR, "performance_benchmarks.png"), bbox_inches='tight')
+    plt.close()
+    print("Generated: performance_benchmarks.png")
+
+def plot_hedging_pnl():
+    try:
+         data = np.load(os.path.join(BASE_DIR, "Data", "empirical_hedging_pnl.npy"), allow_pickle=True).item()
+    except Exception as e:
+         print("Missing empirical hedging data:", e)
+         return
+         
+    days = data['days']
+    bs_pnl = data['pnl_black_scholes']
+    dl_pnl = data['pnl_deep_bsde']
+    
+    fig, ax = plt.subplots(figsize=(10, 6), dpi=300)
+    ax.grid(True, linestyle=':', color='#cccccc', zorder=0)
+    
+    ax.plot(days, bs_pnl, color='#d62728', lw=2, label='Traditional Black-Scholes Delta', zorder=3)
+    ax.plot(days, dl_pnl, color='#1f77b4', lw=2.5, label='Deep BSDE Rough Volatility Delta', zorder=4)
+    
+    ax.fill_between(days, bs_pnl, dl_pnl, where=(np.array(dl_pnl) > np.array(bs_pnl)), color='#1f77b4', alpha=0.15, interpolate=True)
+    ax.fill_between(days, bs_pnl, dl_pnl, where=(np.array(dl_pnl) <= np.array(bs_pnl)), color='#d62728', alpha=0.15, interpolate=True)
+    
+    ax.axhline(0, color='black', lw=1, zorder=2)
+    
+    ax.set_xlabel('Trading Days Since Inception (2020 COVID-19 Crash Window)', fontweight='bold')
+    ax.set_ylabel('Cumulative Hedging P&L (USD per Share)', fontweight='bold')
+    ax.set_title('Empirical Daily Rebalanced Portfolio: Neural Deltas vs Linear Analytics', fontsize=14, fontweight='bold', pad=15)
+    ax.legend(facecolor='white', edgecolor='black', loc='lower left')
+    
+    plt.tight_layout()
+    plt.savefig(os.path.join(FIGS_DIR, "hedging_pnl_trajectory.png"), bbox_inches='tight')
+    plt.close()
+    print("Generated: hedging_pnl_trajectory.png")
+
+
 if __name__ == "__main__":
     import warnings
     warnings.filterwarnings('ignore')
@@ -401,3 +469,5 @@ if __name__ == "__main__":
     plot_gradient_flow_and_3d_error()
     plot_training_loss()
     plot_pricing_surfaces_3d()
+    plot_performance_benchmarks()
+    plot_hedging_pnl()

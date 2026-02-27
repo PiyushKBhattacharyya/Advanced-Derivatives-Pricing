@@ -3,7 +3,7 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 
-def fetch_empirical_paths(period="5y"):
+def fetch_empirical_paths(period="max"):
     """
     Downloads historical paths of the S&P 500 (^SPX) and the VIX (^VIX) 
     to serve as the Spot and Variance paths respectively.
