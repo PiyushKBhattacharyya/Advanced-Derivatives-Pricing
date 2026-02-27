@@ -286,7 +286,7 @@ def plot_training_loss():
     from contextlib import redirect_stdout
     
     with io.StringIO() as buf, redirect_stdout(buf):
-        model, loss_history, _, _, _ = train_model(epochs=150, lr=1e-3)
+        model, loss_history, _, _, _ = train_model(epochs=500, lr=1e-3)
         
     epochs = np.arange(1, len(loss_history) + 1)
     

@@ -97,7 +97,7 @@ def bsde_empirical_loss(predicted_prices, market_prices, predicted_greeks):
     
     return mse_loss + delta_vega_smoothness_penalty
 
-def train_model(epochs=100, lr=1e-3):
+def train_model(epochs=500, lr=1e-3):
     """
     Executes the training sequence on the actual SPX options chain data.
     """
@@ -140,4 +140,4 @@ def train_model(epochs=100, lr=1e-3):
     return model, loss_history, price_scaler, spot_scaler, strike_scaler
 
 if __name__ == "__main__":
-    train_model(epochs=100)
+    train_model(epochs=500)
