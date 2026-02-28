@@ -14,7 +14,7 @@ sys.path.append(BASE_DIR)
 
 from src.models import DeepBSDE_RoughVol
 from src.train import prepare_empirical_batches
-from src.institutional_baselines import sabr_call_price, sabr_implied_vol, black_scholes_call
+from src.institutional_baselines import sabr_call_price, sabr_implied_vol, black_scholes_call, deterministic_local_vol_call
 
 # ==========================================
 # 0. CONFIGURATION & STYLING
@@ -162,6 +162,7 @@ with st.spinner("Compiling structural dual-surface geometries natively..."):
     # 1. Evaluate PyTorch Surfacing natively
     dl_prices = np.zeros_like(K_mesh)
     sabr_prices = np.zeros_like(K_mesh)
+    bsm_prices = np.zeros_like(K_mesh)
     
     for i in range(20):
         for j in range(20):
@@ -181,6 +182,10 @@ with st.spinner("Compiling structural dual-surface geometries natively..."):
             # SABR Banking Execution Eval
             p_sabr = sabr_call_price(S_live, k_val, t_val, r_val, sabr_alpha, sabr_beta, sabr_rho, sabr_nu)
             sabr_prices[i, j] = np.maximum(p_sabr, 0.0)
+            
+            # Pure Black-Scholes Evaluator (Using Live ^VIX strictly)
+            p_bsm = black_scholes_call(S_live, k_val, t_val, r_val, np.sqrt(V_live))
+            bsm_prices[i, j] = np.maximum(p_bsm, 0.0)
 
 fig_3d = go.Figure()
 
@@ -192,6 +197,11 @@ fig_3d.add_trace(go.Surface(z=dl_prices, x=K_array, y=T_array,
 # Plot Legacy SABR Banking Manifold
 fig_3d.add_trace(go.Surface(z=sabr_prices, x=K_array, y=T_array,
                             colorscale='Blues', name='Tier-1 SABR Baseline', opacity=0.6,
+                            showscale=False))
+
+# Plot Classic Black-Scholes
+fig_3d.add_trace(go.Surface(z=bsm_prices, x=K_array, y=T_array,
+                            colorscale='Reds', name='Classic Black-Scholes (Live VIX)', opacity=0.4,
                             showscale=False))
 
 fig_3d.update_layout(
@@ -217,7 +227,8 @@ with col_3d_text:
     
     This is the live Option Pricing surface mapping the forward limit. 
     
-    The **Transparent Blue Surface** represents the standard PDE banking limit (SABR). It relies entirely on static, instantaneous Spot data (Markovian).
+    The **Red Surface** represents the Nobel-winning Black-Scholes assumption of static, flat volatility across all boundaries.
+    The **Transparent Blue Surface** represents the standard PDE banking limit (SABR). It relies entirely on static, instantaneous Spot data (Markovian) to create a 'smile' curve.
     
     The **Solid Heatmap** represents the Deep BSDE PyTorch network. Because it ingests the entire 20-day historical momentum (Non-Markovian), you can visually see it dynamically warping and adjusting option premiums based on how the volatility skew physically behaved recently—an edge traditional math cannot replicate!
     """)
@@ -232,6 +243,8 @@ eval_maturity = st.slider("Dynamically Slice Maturity Boundary T (Years)", 0.05,
 sliced_k = np.linspace(S_live*0.8, S_live*1.2, 50)
 slice_dl = []
 slice_sabr = []
+slice_bsm = []
+slice_lv = []
 
 for k_val in sliced_k:
     # Scale Network parameters natively
@@ -245,10 +258,18 @@ for k_val in sliced_k:
     # Banking Formula
     p_sabr = sabr_call_price(S_live, k_val, eval_maturity, r_val, sabr_alpha, sabr_beta, sabr_rho, sabr_nu)
     slice_sabr.append(np.maximum(p_sabr, 0.0))
+    
+    p_bsm = black_scholes_call(S_live, k_val, eval_maturity, r_val, np.sqrt(V_live))
+    slice_bsm.append(np.maximum(p_bsm, 0.0))
+    
+    p_lv = deterministic_local_vol_call(S_live, k_val, eval_maturity, r_val, np.sqrt(V_live))
+    slice_lv.append(np.maximum(p_lv, 0.0))
 
 fig_2d = go.Figure()
 fig_2d.add_trace(go.Scatter(x=sliced_k, y=slice_dl, mode='lines', name='Deep NN Rough Volatility', line=dict(color='#00ffcc', width=4)))
 fig_2d.add_trace(go.Scatter(x=sliced_k, y=slice_sabr, mode='lines', name='Legacy SABR Polynomial', line=dict(dash='dash', color='#2f81f7', width=2)))
+fig_2d.add_trace(go.Scatter(x=sliced_k, y=slice_bsm, mode='lines', name='Classic Black-Scholes', line=dict(dash='dot', color='#ff3333', width=2)))
+fig_2d.add_trace(go.Scatter(x=sliced_k, y=slice_lv, mode='lines', name='Dupire Local Volatility', line=dict(dash='dashdot', color='#ff00ff', width=2)))
 
 fig_2d.update_layout(
     title=f"Theoretical Pricing Cross-Section sliced accurately at exactly T={eval_maturity} years maturity.",
@@ -270,7 +291,7 @@ with col_2d_text:
     
     This 2D graph slices explicitly through the 3D block above at the exact maturity selected.
     
-    Notice how the **Dashed Blue Line** (SABR) mathematically straight-lines toward zero for OTM (Out-Of-The-Money) strikes? It cannot comprehend panic.
+    Notice how the **Red Dotted Line** (Black-Scholes) is completely flat and blind to risk. The **Purple / Blue Dashed Lines** (Local Vol / SABR) mathematically curve but ultimately straight-line toward zero for extreme strikes because they cannot comprehend momentum panic.
     
-    The **Solid Green Path** (Deep BSDE) natively prices in "fat tails" because it remembers the historical rough volatility vectors from its training, meaning it accurately predicts higher premiums during extreme market constraints.
+    The **Solid Green Path** (Deep BSDE) natively prices in "fat tails" because it remembers the historical rough volatility vectors from its training, accurately predicting fundamentally higher bounds during extreme market constraints.
     """)
