@@ -612,7 +612,7 @@ with tab3:
                 st.plotly_chart(fig_ai, use_container_width=True)
                 st.info(
                     "**What are these two lines?**\n\n"
-                    "🟢 **Green Line — 'AI Target Risk Level':** This is what our Deep Learning model says the *perfect* amount of S&P 500 stock to hold each day. Right now it recommends holding about **10–12%** (very cautious — the market has been volatile lately).\n\n"
+                    "🟢 **Green Line — 'AI Target Risk Level':** What our AI says the *perfect* amount of S&P 500 stock to hold each day is. Right now it recommends holding about **10–12%** (very cautious — the market has been volatile lately).\n\n"
                     "🩷 **Pink Line — 'Trading Robot Reality':** What the Trading Robot *actually* decided to hold after factoring in real-world **transaction fees**. It deliberately holds slightly less to avoid wasting money on unnecessary trades.\n\n"
                     "*The gap between the lines = fees saved by trading less. A flat pink line near zero means the robot stayed out of the market entirely to avoid costs.*"
                 )
@@ -622,7 +622,7 @@ with tab3:
                 # ==========================================
                 st.markdown("---")
                 st.subheader("💰 Simulated Portfolio Dollar Value")
-                st.caption("Starting with a **$100,000** portfolio and watching how each strategy performs over the 20 days.")
+                st.caption("Starting with a portfolio of **100,000 USD** and watching how each strategy performs over the 20 days.")
                 
                 PORTFOLIO_START = 100_000.0
                 portfolio_robot = [PORTFOLIO_START]
@@ -682,9 +682,9 @@ with tab3:
                 st.plotly_chart(fig_port, use_container_width=True)
                 st.info(
                     "**What does this chart show?**\n\n"
-                    "Both strategies start with **$100,000**. The chart is zoomed tightly into the actual dollar range so small differences are clearly visible.\n\n"
+                    "Both strategies start with **100,000 USD**. The chart is zoomed tightly into the actual dollar range so small differences are clearly visible.\n\n"
                     "🟢 **Green Line (Robot Portfolio):** The robot holds only ~10% of its money in stocks. It barely moves — which looks flat, but that is a **good thing**: the portfolio is protected from market swings.\n\n"
-                    "🔴 **Red Dashed Line (Unhedged / 100% Stock):** This investor put all $100,000 into the stock market. The red line swings up and down with every market move.\n\n"
+                    "🔴 **Red Dashed Line (Unhedged / 100% Stock):** This investor put all their money into the stock market. The red line swings up and down with every market move.\n\n"
                     "*The shaded red zone between the lines = the money the robot saved by not being fully exposed to the market.*"
                 )
                 
