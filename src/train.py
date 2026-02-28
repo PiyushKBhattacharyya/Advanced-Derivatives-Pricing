@@ -15,6 +15,10 @@ price_scaler = StandardScaler()
 spot_scaler = StandardScaler()
 strike_scaler = StandardScaler()
 
+# Phase 6: Deep Hedging Frictions
+# 0.0002 = 2 basis points per ticket (typical Tier-1 Execution Cost)
+EXECUTION_COST = 0.0002 
+
 def prepare_empirical_batches(seq_len=20, batch_size=32):
     """
     Constructs the PyTorch training batches by extracting historical windows exclusively from 
@@ -84,18 +88,23 @@ def prepare_empirical_batches(seq_len=20, batch_size=32):
 
 def bsde_empirical_loss(predicted_prices, market_prices, predicted_greeks):
     """
-    Calculates the Deep BSDE Loss.
-    We strictly penalize deviation from the actual empirical traded option prices.
-    A secondary smoothness regularization is applied to the Delta strategy hedging.
+    Calculates the Deep Hedging Loss (Friction-Aware BSDE).
+    We optimize precisely for:
+    1.  Price Convergence (MSE)
+    2.  Hedging Stability (Variance Penalty)
+    3.  Transaction Cost Minimization (Absolute Greek Penalty)
     """
     mse_loss = nn.MSELoss()(predicted_prices, market_prices)
     
-    # We apply a small L2 regularization to the Greeks (Delta/Vega) to ensure the 
-    # Neural Network finds a smooth, realistic hedging strategy rather than massive
-    # discontinuous jumps (which would bankrupt a real quantitative trading desk).
-    delta_vega_smoothness_penalty = 1e-4 * torch.mean(predicted_greeks**2)
+    # 1. Variance Control (Penalize extreme, unstable hedging leverage)
+    variance_penalty = 1e-4 * torch.mean(predicted_greeks**2)
     
-    return mse_loss + delta_vega_smoothness_penalty
+    # 2. Transaction Cost (Friction) Penalty
+    # We penalize the absolute size of the Greeks as a proxy for total 
+    # portfolio turnover costs in a discrete-time daily rebalancing regime.
+    friction_penalty = EXECUTION_COST * torch.mean(torch.abs(predicted_greeks))
+    
+    return mse_loss + variance_penalty + friction_penalty
 
 def train_model(epochs=500, lr=1e-3):
     """

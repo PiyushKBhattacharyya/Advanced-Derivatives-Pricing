@@ -2,6 +2,9 @@ import os
 import subprocess
 import sys
 
+# Workaround for OpenMP duplication error (libomp.dylib conflict)
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
+
 def run_script(script_name):
     print(f"\n{'='*60}")
     print(f"Executing: src/{script_name}")
@@ -28,11 +31,12 @@ if __name__ == "__main__":
     
     # The strictly enforced sequence required to rebuild all mathematical states from scratch
     execution_sequence = [
-        "data_loader.py",       # 1. Pull the latest Live Options Chains from the external broker/API
-        "market_paths.py",      # 2. Extract strictly 15-30 years of True S&P 500 & VIX trajectories 
-        "train.py",             # 3. Train the Core Neural Architecture & Export empirical memory scalers
-        "validation.py",        # 4. Numerically validate latency constraints and COVID-19 Physical P&L
-        "generate_figures.py"   # 5. Native compilation of the mathematical 3D structures and reporting graphs
+        "data_loader.py",            # 1. Pull the latest Live Options Chains from the external broker/API
+        "market_paths.py",           # 2. Extract strictly 15-30 years of True S&P 500 & VIX trajectories 
+        "institutional_baselines.py",# 3. Generate SABR / rBergomi benchmarks for Tier-1 comparison
+        "train.py",                  # 4. Train the Friction-Aware Neural Architecture
+        "validation.py",             # 5. Numerically validate latency and COVID-19 Physical P&L
+        "generate_figures.py"        # 6. Native compilation of the mathematical 3D structures
     ]
     
     for script in execution_sequence:
