@@ -674,3 +674,79 @@ with tab3:
                 col_m1.metric("Robot Final Value", f"${portfolio_robot[-1]:,.0f}", f"{robot_return:+.2f}%")
                 col_m2.metric("Unhedged Final Value", f"${portfolio_unhedged[-1]:,.0f}", f"{unhedged_return:+.2f}%")
                 col_m3.metric("Capital Saved vs Unhedged", f"${portfolio_robot[-1] - portfolio_unhedged[-1]:+,.0f}")
+                
+                # ==========================================
+                # CRASH SCENARIO vs INDUSTRY BASELINES
+                # ==========================================
+                st.markdown("---")
+                st.subheader("🔴 What If a 2020-Style Crash Hit Tomorrow?")
+                st.markdown(
+                    "Below we stress-test all strategies against a simulated **35% market crash over 20 days** "
+                    "(the same speed as the real COVID-19 crash). Starting portfolio: **$100,000**."
+                )
+                
+                # Build crash price path: linear drop from today's S&P 500 by 35%
+                n_crash = 21
+                crash_prices = S_live * np.linspace(1.0, 0.65, n_crash)
+                crash_returns = np.diff(crash_prices) / crash_prices[:-1]
+                crash_days_x = np.arange(n_crash)
+                
+                INIT = 100_000.0
+                # Each strategy: [name, color, dash, initial_holding or None for dynamic]
+                strategy_specs = [
+                    ("🤖 AI Robot (Our System)",       "#00ffcc", "solid",   np.clip(np.mean(rl_actions), 0.0, 1.0)),
+                    ("📐 Black-Scholes Delta Hedge",   "#ff3333", "dash",    None),   # dynamic via bs_delta
+                    ("📊 SABR Delta Hedge",            "#2f81f7", "dash",    None),   # dynamic via sabr
+                    ("⚖️ Static 50% Hedge",            "#ff00ff", "dashdot", 0.50),
+                    ("📉 Fully Unhedged (100% Stock)", "#888888", "dot",     1.00),
+                ]
+                
+                crash_portfolios = {name: [INIT] for name, *_ in strategy_specs}
+                
+                for day_i, day_ret in enumerate(crash_returns):
+                    S_crash_now = crash_prices[day_i]
+                    T_crash_rem = max(1.0 - day_i / 20.0, 1e-3)
+                    
+                    for (name, color, dash, fixed_h) in strategy_specs:
+                        prev_val = crash_portfolios[name][-1]
+                        
+                        if fixed_h is not None:
+                            h = fixed_h
+                        elif "Black-Scholes" in name:
+                            h = bs_delta(S_crash_now, S_live, T_crash_rem, r_val, np.sqrt(V_live) * bsm_vol_mult)
+                        else:  # SABR
+                            sv = sabr_implied_vol(S_crash_now, S_live, T_crash_rem, sabr_alpha, sabr_beta, sabr_rho, sabr_nu)
+                            h = bs_delta(S_crash_now, S_live, T_crash_rem, r_val, sv)
+                        
+                        h = np.clip(h, 0.0, 1.0)
+                        crash_portfolios[name].append(prev_val * (1.0 + h * day_ret))
+                
+                fig_crash_cmp = go.Figure()
+                for (name, color, dash, _) in strategy_specs:
+                    fig_crash_cmp.add_trace(go.Scatter(
+                        x=crash_days_x, y=crash_portfolios[name],
+                        mode='lines', name=name,
+                        line=dict(color=color, dash=dash, width=3 if "Robot" in name else 2)
+                    ))
+                
+                fig_crash_cmp.add_hline(y=INIT, line_dash="dot", line_color="#555",
+                                        annotation_text="$100K Starting Value", annotation_position="bottom right")
+                fig_crash_cmp.update_layout(
+                    title="Portfolio Survival: 35% Crash Simulation — Who Loses the Least?",
+                    xaxis_title="Days Into the Crash",
+                    yaxis_title="Portfolio Value ($)",
+                    yaxis_tickformat="$,.0f",
+                    template="plotly_dark",
+                    height=450,
+                    margin=dict(l=0, r=0, t=50, b=0),
+                    legend=dict(yanchor="top", y=-0.15, xanchor="center", x=0.5, orientation="h")
+                )
+                st.plotly_chart(fig_crash_cmp, use_container_width=True)
+                
+                # Summary comparison table
+                st.markdown("**💀 Losses After the Full 35% Crash:**")
+                cols = st.columns(len(strategy_specs))
+                for col, (name, color, dash, _) in zip(cols, strategy_specs):
+                    final_val = crash_portfolios[name][-1]
+                    loss = final_val - INIT
+                    col.metric(name.split("(")[0].strip(), f"${final_val:,.0f}", f"{loss:+,.0f}")
