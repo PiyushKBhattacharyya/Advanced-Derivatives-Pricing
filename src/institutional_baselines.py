@@ -49,7 +49,7 @@ def sabr_call_price(F, K, T, r, alpha, beta, rho, nu):
     sigma_sabr = sabr_implied_vol(F, K, T, alpha, beta, rho, nu)
     return black_scholes_call(F, K, T, r, sigma_sabr)
 
-def deterministic_local_vol_call(S, K, T, r, sigma_atm):
+def deterministic_local_vol_call(S, K, T, r, sigma_atm, a=-1.5, b=0.5):
     """
     Deterministic Local Volatility (Dupire Proxy).
     Tier-1 banks use this to fit strictly to the current instantaneous smile, 
@@ -58,7 +58,6 @@ def deterministic_local_vol_call(S, K, T, r, sigma_atm):
     """
     moneyness = np.log(S / K)
     # Quadratic deterministic skew overlay parameter limits
-    a, b = -0.15, 0.05
     skewed_vol = sigma_atm * (1.0 + a * moneyness + b * moneyness**2)
     skewed_vol = np.maximum(skewed_vol, 1e-4) # Floor bounds
     

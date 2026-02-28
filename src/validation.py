@@ -10,6 +10,7 @@ sys.path.append(BASE_DIR)
 from src.models import DeepBSDE_RoughVol
 from src.train import prepare_empirical_batches
 from src.baselines import extract_challenge_regime, black_scholes_call
+from src.institutional_baselines import sabr_implied_vol
 from scipy.stats import norm
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -114,9 +115,13 @@ def run_empirical_hedging_backtest():
     # Initialize PnL trajectories
     pnls_bs = [0.0]
     pnls_dl = [0.0]
+    pnls_sabr = [0.0]
+    pnls_lv = [0.0]
     
     delta_bs_prev = 0.0
     delta_dl_prev = 0.0
+    delta_sabr_prev = 0.0
+    delta_lv_prev = 0.0
     
     r = 0.05
     
@@ -131,9 +136,16 @@ def run_empirical_hedging_backtest():
          if T_remaining <= 0.0: break
          
          # 1. Compute Black-Scholes Empirical Delta
-         # V_today is literally Variance, so sigma = sqrt(V_today)
          sigma_today = np.sqrt(V_today)
          d_bs = bs_delta(S_today, K, T_remaining, r, sigma_today)
+         
+         # 1.5 Compute SABR and Local Vol Empirical Deltas
+         s_vol = sabr_implied_vol(S_today, K, T_remaining, alpha=0.4, beta=1.0, rho=-0.6, nu=0.2)
+         d_sabr = bs_delta(S_today, K, T_remaining, r, s_vol)
+         
+         moneyness = np.log(S_today / K)
+         lv_vol = np.maximum(sigma_today * (1.0 - 1.5 * moneyness + 0.5 * moneyness**2), 1e-4)
+         d_lv = bs_delta(S_today, K, T_remaining, r, lv_vol)
          
          # 2. Compute Deep BSDE Empirical Delta
          trail_S = S_arr[i-seq_len+1 : i+1]
@@ -155,19 +167,27 @@ def run_empirical_hedging_backtest():
          # Profit from holding exactly Delta shares of SPX overnight
          daily_pnl_bs = delta_bs_prev * (S_tomorr - S_today)
          daily_pnl_dl = delta_dl_prev * (S_tomorr - S_today)
+         daily_pnl_sabr = delta_sabr_prev * (S_tomorr - S_today)
+         daily_pnl_lv = delta_lv_prev * (S_tomorr - S_today)
          
          pnls_bs.append(pnls_bs[-1] + daily_pnl_bs)
          pnls_dl.append(pnls_dl[-1] + daily_pnl_dl)
+         pnls_sabr.append(pnls_sabr[-1] + daily_pnl_sabr)
+         pnls_lv.append(pnls_lv[-1] + daily_pnl_lv)
          
          # Roll Deltas
          delta_bs_prev = d_bs
          delta_dl_prev = d_dl
+         delta_sabr_prev = d_sabr
+         delta_lv_prev = d_lv
          
     # Save Hedging trajectories natively to dict for charting phase
     hedging_data = {
          'days': np.arange(len(pnls_bs)),
          'pnl_black_scholes': pnls_bs,
-         'pnl_deep_bsde': pnls_dl
+         'pnl_deep_bsde': pnls_dl,
+         'pnl_sabr': pnls_sabr,
+         'pnl_local_vol': pnls_lv
     }
     np.save(os.path.join(BASE_DIR, "Data", "empirical_hedging_pnl.npy"), hedging_data)
     
