@@ -139,26 +139,67 @@ with st.sidebar:
     st.caption("*(Note: For now, this experimental AI is strictly trained on the S&P 500 index.)*")
     
     st.markdown("---")
-    st.subheader("🏦 Bank Formula 1: SABR")
-    st.markdown("*(Tweak the math that creates the Transparent Blue surface)*")
-    sabr_alpha = st.slider("Volatility (Risk Level)", 0.01, 1.0, 0.4)
-    sabr_beta = st.slider("Price Connection to Risk", 0.0, 1.0, 1.0)
-    sabr_rho = st.slider("Market Drop Correlation", -0.99, 0.99, -0.6)
-    sabr_nu = st.slider("How Fast Volatility Changes", 0.01, 2.0, 0.2)
-    
-    st.markdown("---")
-    st.subheader("📊 Bank Formula 2: Black-Scholes")
-    bsm_vol_mult = st.slider("Black-Scholes Risk Multiplier", 0.1, 3.0, 1.0)
-    
-    st.markdown("---")
-    st.subheader("📉 Bank Formula 3: Local Volatility")
-    dupire_a = st.slider("Panic Curve", -5.0, 5.0, -1.5)
-    dupire_b = st.slider("Panic Acceleration", -1.0, 5.0, 0.5)
-    
-    r_val = 0.05
-    st.markdown("---")
-    if st.button("Reload AI Data"):
+    if st.button("🔄 Reload All AI Data"):
         st.cache_data.clear()
+        st.cache_resource.clear()
+        st.rerun()
+    
+    # ── TAB 1: LIVE OPTION PRICING ──────────────────────────
+    with st.expander("⚡ Tab 1: Pricing Model Controls", expanded=True):
+        st.subheader("🏦 Bank Formula 1: SABR")
+        st.caption("Tweak the math that creates the Transparent Blue 3D surface")
+        sabr_alpha = st.slider("Volatility (Risk Level)", 0.01, 1.0, 0.4, key="sabr_alpha")
+        sabr_beta = st.slider("Price Connection to Risk", 0.0, 1.0, 1.0, key="sabr_beta")
+        sabr_rho = st.slider("Market Drop Correlation", -0.99, 0.99, -0.6, key="sabr_rho")
+        sabr_nu = st.slider("How Fast Volatility Changes", 0.01, 2.0, 0.2, key="sabr_nu")
+        
+        st.markdown("---")
+        st.subheader("📊 Bank Formula 2: Black-Scholes")
+        bsm_vol_mult = st.slider("Black-Scholes Risk Multiplier", 0.1, 3.0, 1.0, key="bsm_mult")
+        
+        st.markdown("---")
+        st.subheader("📉 Bank Formula 3: Local Volatility")
+        dupire_a = st.slider("Panic Curve", -5.0, 5.0, -1.5, key="dup_a")
+        dupire_b = st.slider("Panic Acceleration", -1.0, 5.0, 0.5, key="dup_b")
+        
+        r_val = 0.05
+    
+    # ── TAB 2: CRASH SIMULATOR ──────────────────────────────
+    with st.expander("📉 Tab 2: Crash Simulator Controls"):
+        st.caption("These settings configure the historical crash simulation.")
+        crash_scenario = st.selectbox(
+            "Choose a Historical Crash to Study",
+            ["COVID-19 (Q1 2020)", "Financial Crisis (2008)", "Dot-Com Bust (2000–2002)"],
+            key="crash_scenario"
+        )
+        crash_scenario_dates = {
+            "COVID-19 (Q1 2020)":      ("2020-01-01", "2020-06-01"),
+            "Financial Crisis (2008)":  ("2008-06-01", "2009-06-01"),
+            "Dot-Com Bust (2000–2002)": ("2000-03-01", "2002-12-01"),
+        }
+        crash_start, crash_end = crash_scenario_dates[crash_scenario]
+    
+    # ── TAB 3: AI RISK HEATMAP ──────────────────────────────
+    with st.expander("🌐 Tab 3: Risk Heatmap Controls"):
+        st.caption("Adjust the resolution and spot range of the Gamma heatmap.")
+        heatmap_grid = st.slider("Grid Resolution (Points Per Axis)", 8, 25, 15, step=1, key="heatmap_grid")
+        heatmap_spot_pct = st.slider(
+            "Spot Price Range Around Current (±%)", 5, 40, 20, key="heatmap_spot_pct"
+        )
+    
+    # ── TAB 4: AUTO-TRADING AI ──────────────────────────────
+    with st.expander("🤖 Tab 4: Auto-Trading AI Controls"):
+        st.caption("Configure the live trading simulation and crash stress-test.")
+        sim_portfolio_size = st.number_input(
+            "Starting Portfolio Size (USD)", min_value=10_000, max_value=10_000_000,
+            value=100_000, step=10_000, key="sim_portfolio"
+        )
+        sim_transaction_cost = st.slider(
+            "Transaction Cost (Basis Points)", 1, 20, 2, key="sim_tc"
+        ) / 10_000
+        sim_crash_severity = st.slider(
+            "Crash Stress-Test Severity (%)", 10, 60, 35, key="sim_crash_pct"
+        ) / 100
 
 # LOAD CONSTRAINTS
 S_live, V_live, trail_S, trail_V, intraday_df = ping_live_market(asset_selection)
@@ -451,11 +492,11 @@ with tab2:
         pnl_lv = pnl_data.get('pnl_local_vol', pnl_bsm)
         
         spx_df = pd.read_csv(spx_hist_path, index_col=0, parse_dates=True)
-        # Slicing the exact COVID-19 crash bounds linearly
-        test_dates = spx_df.loc['2020-01-01':'2020-06-01'].index[:len(pnl_bsm)]
+        # Use scenario dates from sidebar selector
+        test_dates = spx_df.loc[crash_start:crash_end].index[:len(pnl_bsm)]
         
         if len(test_dates) == len(pnl_bsm):
-            st.markdown("### Simulated 90-Day ATM Hedge P&L Trajectory")
+            st.markdown(f"### 90-Day Hedge P&L — {crash_scenario}")
             c_crash, c_hedge = st.columns(2)
             
             with c_crash:
@@ -482,9 +523,11 @@ with tab3:
     st.header("🌐 The 'Risk Acceleration' Map (AI Gamma)")
     
     with st.spinner("Executing dual PyTorch Autograd passes blindly extracting the Hessian physical matrix..."):
-        # Synthesize 15x15 boundary grid natively
-        K_array_g = np.linspace(min_K, max_K, 15)
-        T_array_g = np.linspace(0.01, 1.0, 15)
+        # Heatmap grid and spot range from sidebar controls
+        heatmap_min_K = S_live * (1 - heatmap_spot_pct / 100)
+        heatmap_max_K = S_live * (1 + heatmap_spot_pct / 100)
+        K_array_g = np.linspace(heatmap_min_K, heatmap_max_K, heatmap_grid)
+        T_array_g = np.linspace(0.01, 1.0, heatmap_grid)
         K_mesh_g, T_mesh_g = np.meshgrid(K_array_g, T_array_g)
         
         dl_gammas = np.zeros_like(K_mesh_g)
@@ -494,8 +537,8 @@ with tab3:
         path_tnsr_g = torch.tensor(np.stack([s_scaled, trail_V], axis=-1), dtype=torch.float32).unsqueeze(0).to(device)
         path_tnsr_g.requires_grad_(True)
         
-        for i in range(15):
-            for j in range(15):
+        for i in range(heatmap_grid):
+            for j in range(heatmap_grid):
                 k_val = K_mesh_g[i, j]
                 t_val = T_mesh_g[i, j]
                 
@@ -653,12 +696,12 @@ with tab3:
                 # ==========================================
                 st.markdown("---")
                 st.subheader("💰 Simulated Portfolio Dollar Value")
-                st.caption("Starting with a portfolio of **100,000 USD** and watching how each strategy performs over the 20 days.")
+                st.caption(f"Starting with a portfolio of **{sim_portfolio_size:,.0f} USD** and watching how each strategy performs over the 20 days.")
                 
-                PORTFOLIO_START = 100_000.0
+                PORTFOLIO_START = sim_portfolio_size
                 portfolio_robot = [PORTFOLIO_START]
                 portfolio_unhedged = [PORTFOLIO_START]  # Just holds 100% stock all the time
-                transaction_cost_rate = 0.0002
+                transaction_cost_rate = sim_transaction_cost
                 
                 prev_robot_holding = 0.0
                 for i in range(1, 20):
@@ -731,10 +774,11 @@ with tab3:
                 # CRASH SCENARIO vs INDUSTRY BASELINES
                 # ==========================================
                 st.markdown("---")
-                st.subheader("🔴 What If a 2020-Style Crash Hit Tomorrow?")
+                crash_pct_display = int(sim_crash_severity * 100)
+                st.subheader(f"🔴 What If a {crash_pct_display}% Crash Hit Tomorrow?")
                 st.markdown(
-                    "Below we stress-test all strategies against a simulated **35% market crash over 20 days** "
-                    "(the same speed as the real COVID-19 crash). Starting portfolio: **$100,000**."
+                    f"Below we stress-test all strategies against a simulated **{crash_pct_display}% market crash over 20 days** "
+                    f"(you can adjust severity in the sidebar). Starting portfolio: **{sim_portfolio_size:,.0f} USD**."
                 )
                 
                 with st.expander("💡 What does 'Hedged' vs 'Unhedged' mean? (Click to read)"):
@@ -754,13 +798,13 @@ with tab3:
                     > **AI Robot** = Uses 20 days of market memory + real trading fee costs to decide holding each day.
                     """)
                 
-                # Build crash price path: linear drop from today's S&P 500 by 35%
+                # Build crash price path from sidebar severity setting
                 n_crash = 21
-                crash_prices = S_live * np.linspace(1.0, 0.65, n_crash)
+                crash_prices = S_live * np.linspace(1.0, 1.0 - sim_crash_severity, n_crash)
                 crash_returns = np.diff(crash_prices) / crash_prices[:-1]
                 crash_days_x = np.arange(n_crash)
                 
-                INIT = 100_000.0
+                INIT = sim_portfolio_size
                 # Each strategy: [name, color, dash, fixed_holding or None for dynamic]
                 strategy_specs = [
                     ("🤖 AI Robot (Our System)",       "#00ffcc", "solid",   "robot"),  # dynamic via rl_agent
