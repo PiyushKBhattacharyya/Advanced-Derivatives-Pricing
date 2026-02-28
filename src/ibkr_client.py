@@ -8,6 +8,18 @@ import logging
 
 try:
     import asyncio
+    import nest_asyncio
+    
+    # Streamlit ScriptRunner threads lack a default asyncio event loop, 
+    # which fatally crashes ib_insync (via eventkit) on import.
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+    nest_asyncio.apply()
+        
     from ib_insync import IB, Index, Option, LimitOrder, util
     HAS_IB = True
 except ImportError:

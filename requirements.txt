@@ -16,3 +16,4 @@ plotly
 ib_insync
 gymnasium
 stable-baselines3
+nest-asyncio
