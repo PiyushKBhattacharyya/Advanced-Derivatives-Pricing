@@ -11,6 +11,11 @@ def bs_delta(S, K, T, r, sigma):
     d1 = (np.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
     return norm.cdf(d1)
 
+def bs_gamma(S, K, T, r, sigma):
+    """Computes the 2nd-order derivative of the Black-Scholes price w.r.t Spot (∂²C/∂S²)"""
+    d1 = (np.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
+    return norm.pdf(d1) / (S * sigma * np.sqrt(T))
+
 def sabr_implied_vol(F, K, T, alpha, beta, rho, nu):
     """
     Hagan's Algebraic 2002 SABR Volatility Approximation.
