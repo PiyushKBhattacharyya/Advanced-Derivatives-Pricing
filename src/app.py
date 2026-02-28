@@ -74,7 +74,14 @@ def fetch_yahoo_history(ticker_symbol="^SPX"):
         # Synthetic 5-min intraday (today only)
         intraday_times = pd.date_range(end=pd.Timestamp.today(), periods=78, freq="5min")
         intraday_prices = spx_prices[-1] * np.cumprod(1 + np.random.normal(0, 0.001, 78))
-        intraday = pd.DataFrame({"Close": intraday_prices, "Open": intraday_prices, "Volume": 1000}, index=intraday_times)
+        noise = intraday_prices * 0.0005
+        intraday = pd.DataFrame({
+            "Open":   intraday_prices,
+            "High":   intraday_prices + noise,
+            "Low":    intraday_prices - noise,
+            "Close":  intraday_prices,
+            "Volume": 1000
+        }, index=intraday_times)
         return spx_hist, vix_hist, intraday
 
 def ping_live_market(ticker_symbol="^SPX"):
