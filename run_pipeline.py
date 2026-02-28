@@ -36,9 +36,10 @@ if __name__ == "__main__":
         "institutional_baselines.py",# 3. Generate SABR / rBergomi benchmarks for Tier-1 comparison
         "stress_test_gen.py",        # 4. Phase 7: Generate Synthetic Shadow Crashes via MarketVAE
         "train.py",                  # 5. Train the Friction-Aware Neural Architecture
-        "explainability.py",         # 6. Phase 7: Execute Feature Attribution / Saliency maps
-        "validation.py",             # 7. Numerically validate latency, COVID-19 and Synthetic Crashes
-        "generate_figures.py"        # 8. Final Quant Armoury visualization compilation
+        "rl_agent.py",               # 6. Train the Frictional RL Pipeline against Empirical Data
+        "explainability.py",         # 7. Phase 7: Execute Feature Attribution / Saliency maps
+        "validation.py",             # 8. Numerically validate latency, COVID-19 and Synthetic Crashes
+        "generate_figures.py"        # 9. Final Quant Armoury visualization compilation
     ]
     
     for script in execution_sequence:

@@ -533,6 +533,10 @@ with tab3:
         except ImportError:
             HAS_SB3 = False
             
+        @st.cache_resource
+        def load_rl_agent(path):
+            return PPO.load(path)
+            
         if not HAS_SB3:
             st.error("Deep Learning Pipeline Unmounted: Run `pip install stable-baselines3 gymnasium`")
         else:
@@ -540,7 +544,7 @@ with tab3:
             if not os.path.exists(ppo_path):
                 st.warning("⚠️ **RL Brain Training in Progress!** We detected the Terminal process is actively compiling the Frictional Policy Network right now. Please wait 60 seconds and refresh this tab!")
             else:
-                rl_agent = PPO.load(ppo_path)
+                rl_agent = load_rl_agent(ppo_path)
                 st.success("✅ Proximal Policy Optimization (PPO) Neural Network active. Physical slippage algorithms engaged.")
                 
                 # We iteratively playback the LIVE Trailing 20-Day options path chronologically to force Hedge Rebalancing.

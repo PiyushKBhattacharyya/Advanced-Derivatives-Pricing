@@ -2,7 +2,9 @@
 venv/
 
 # Downloaded Real Market Data
-Data/
+Data/*
+!Data/PPO_Frictional_Agent.zip
+!Data/DeepBSDE_empirical.pth
 *.csv
 
 # Python caching
