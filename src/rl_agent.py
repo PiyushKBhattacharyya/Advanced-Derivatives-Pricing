@@ -68,11 +68,23 @@ def train_frictional_ppo_agent():
     
     logging.info("Environment Validated. Initializing Proximal Policy Optimization (PPO) Brain...")
     
-    # MlpPolicy constructs a 2-layer Neural Network natively processing the [4] vector input
-    model = PPO("MlpPolicy", env, verbose=1, learning_rate=0.0003, n_steps=2048, batch_size=64)
+    # MlpPolicy: 2-layer NN processing the [4] observation vector.
+    # Larger n_steps=4096 gives the agent more context before each update.
+    # Larger batch_size=256 gives more stable gradient estimates.
+    # Lower lr=0.0001 ensures fine-grained convergence near the delta target.
+    model = PPO(
+        "MlpPolicy", env, verbose=1,
+        learning_rate=0.0001,
+        n_steps=4096,
+        batch_size=256,
+        n_epochs=10,
+        gamma=0.99,
+        gae_lambda=0.95,
+        ent_coef=0.005,           # Small entropy bonus encourages exploration
+    )
     
-    logging.info("Commencing Deep RL Training Matrix (1,00,000 Timesteps)...")
-    model.learn(total_timesteps=100000)
+    logging.info("Commencing Deep RL Training Matrix (5,00,000 Timesteps)...")
+    model.learn(total_timesteps=500_000)
     
     # Export the Neural Weights
     save_path = os.path.join(BASE_DIR, "Data", "PPO_Frictional_Agent.zip")

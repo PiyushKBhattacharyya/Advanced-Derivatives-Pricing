@@ -47,26 +47,31 @@ class FrictionalHedgingEnv(gym.Env):
         return np.array([t_rem, S_norm, delta_nn, self.inventory], dtype=np.float32)
         
     def step(self, action):
-        target_inventory = action[0]
+        target_inventory = np.clip(action[0], 0.0, 1.0)
         
         S_current = self.spx_paths[self.current_path, self.current_step]
         S_next = self.spx_paths[self.current_path, min(self.current_step + 1, self.n_steps - 1)]
         
-        # 1. Trading Friction (Cost of physically rebalancing)
+        # 1. Trading Friction (Cost of physically rebalancing) — normalized by spot
         trade_size = np.abs(target_inventory - self.inventory)
-        friction_cost = trade_size * S_current * self.transaction_cost
+        friction_cost = trade_size * self.transaction_cost  # ~0.00002 per unit trade
         
-        # 2. Portfolio Drift (Holding PnL cleanly over the timestep)
-        pnl = target_inventory * (S_next - S_current)
+        # 2. Portfolio PnL — normalized by spot so return is unit-free (~[-0.02, +0.02]/day)
+        daily_return = (S_next - S_current) / S_current
+        pnl = target_inventory * daily_return
         
-        # 3. Reward Function (Maximize PnL, Minimize Friction)
+        # 3. Base reward
         step_reward = pnl - friction_cost
         
-        # 4. Risk Mitigation Penalty (Do not stray too far from the exact Neural Limit)
+        # 4. Risk Penalty — now on the same scale as normalized PnL
         optimal_delta = self.bsde_deltas[self.current_path, self.current_step]
-        risk_penalty = 4.0 * np.abs(target_inventory - optimal_delta)
+        deviation = np.abs(target_inventory - optimal_delta)
+        risk_penalty = 1.0 * deviation  # same unit as pnl now (~0.0–0.3)
         
-        total_reward = step_reward - risk_penalty
+        # 5. Convergence bonus: reward the agent extra for being very close to target
+        convergence_bonus = 0.005 if deviation < 0.02 else 0.0
+        
+        total_reward = step_reward - risk_penalty + convergence_bonus
         
         self.inventory = target_inventory
         self.current_step += 1
