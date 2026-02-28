@@ -150,18 +150,38 @@ sim_portfolio_size = 100_000
 sim_transaction_cost = 0.0002
 sim_crash_severity = 0.35
 
-# Permanent Sidebar Header
+# ── GLOBAL PARAMS ──────────────────
+asset_selection = "^SPX"
+
+# ── GLOBAL PARAMS ──────────────────
+asset_selection = "^SPX"
+
+if 'active_tab' not in st.session_state:
+    st.session_state.active_tab = "⚡ Live Option Pricing"
+
+# ── PANE-DRIVEN NAVIGATION (Top Bar) ──────────────────
+st.markdown("### 🗺️ Select Analysis Pane")
+c1, c2, c3, c4 = st.columns(4)
+nav_pages = ["⚡ Live Option Pricing", "📉 Crash Simulator", "🌐 AI Risk Heatmap", "🤖 Auto-Trading AI"]
+for i, (col, page) in enumerate(zip([c1, c2, c3, c4], nav_pages)):
+    btn_type = "primary" if st.session_state.active_tab == page else "secondary"
+    if col.button(page, use_container_width=True, type=btn_type, key=f"nav_{i}"):
+        st.session_state.active_tab = page
+        st.rerun()
+
+active_page = st.session_state.active_tab
+
+# ── PERMANENT SIDEBAR ──────────────────
 with st.sidebar:
     st.header("⚙️ Dashboard Controls")
-    st.markdown("**Index:** `^SPX` (S&P 500)")
-    asset_selection = "^SPX"
+    st.markdown(f"**Index:** `{asset_selection}` (S&P 500)")
     if st.button("🔄 Reload All AI Data"):
         st.cache_data.clear()
         st.cache_resource.clear()
         st.rerun()
     st.markdown("---")
 
-
+# (Sidebar Injection for the active page is handled inside the page blocks below)
 
 # LOAD CONSTRAINTS
 S_live, V_live, trail_S, trail_V, intraday_df = ping_live_market(asset_selection)
@@ -170,10 +190,14 @@ if S_live is None:
     st.error("Live Web-Socket Connection to Market Exchange structurally failed.")
     st.stop()
 
-tab1, tab2, tab3, tab4 = st.tabs(["⚡ Live Option Pricing", "📉 Crash Simulator", "🌐 AI Risk Heatmap", "🤖 Auto-Trading AI"])
+# ── AI INFRASTRUCTURE (Global) ──────────────────
+model, price_scaler, spot_scaler, strike_scaler = load_deep_bsde_infrastructure()
+s_scaled = spot_scaler.transform(trail_S.reshape(-1,1)).flatten()
+path_tnsr = torch.tensor(np.stack([s_scaled, trail_V], axis=-1), dtype=torch.float32).unsqueeze(0).to(device)
 
 
-with tab1:
+if active_page == "⚡ Live Option Pricing":
+
     with st.sidebar:
         st.subheader("🏦 SABR Formula")
         st.caption("Controls the blue 3D pricing surface")
@@ -227,7 +251,6 @@ with tab1:
         )
         st.plotly_chart(fig_tv, use_container_width=True)
 
-    model, price_scaler, spot_scaler, strike_scaler = load_deep_bsde_infrastructure()
 
     # ==========================================
     # 3. INTERACTIVE 3D PRICING ENGINE
@@ -241,10 +264,6 @@ with tab1:
         K_array = np.linspace(min_K, max_K, 20)
         T_array = np.linspace(0.01, 1.0, 20)
         K_mesh, T_mesh = np.meshgrid(K_array, T_array)
-
-        # Pre-scale trailing memory natively 
-        s_scaled = spot_scaler.transform(trail_S.reshape(-1,1)).flatten()
-        path_tnsr = torch.tensor(np.stack([s_scaled, trail_V], axis=-1), dtype=torch.float32).unsqueeze(0).to(device)
 
         # 1. Evaluate PyTorch Surfacing natively
         dl_prices = np.zeros_like(K_mesh)
@@ -458,7 +477,8 @@ with tab1:
         The **Solid Green Path** is the AI. When the market goes extreme (like during a crash), the AI's curve goes up heavily! It remembers what real crashes look like from its training, allowing it to charge appropriately higher prices to protect you from extreme 'Black Swan' events.
         """)
 
-with tab2:
+elif active_page == "📉 Crash Simulator":
+
     with st.sidebar:
         st.subheader("🕰️ Historical Scenario")
         crash_scenario = st.selectbox(
@@ -513,7 +533,14 @@ with tab2:
     else:
         st.warning("Historical Arrays missing. Please trigger the backend orchestrator via `run.bat` to rebuild the empirical matrix bounds.")
 
-with tab3:
+elif active_page == "🌐 AI Risk Heatmap":
+
+    with st.sidebar:
+        st.subheader("🌐 Surface Controls")
+        heatmap_grid = st.slider("Mesh Density", 5, 30, 15, key="h_grid")
+        heatmap_spot_pct = st.slider("Spot Range (%)", 5, 50, 20, key="h_spot")
+        st.markdown("---")
+
     st.header("🌐 The 'Risk Acceleration' Map (AI Gamma)")
     
     with st.spinner("Executing dual PyTorch Autograd passes blindly extracting the Hessian physical matrix..."):
@@ -581,307 +608,309 @@ with tab3:
             The **Transparent Red Surface** is what banks use.
             ''')
 
-    # ==========================================
-    # 6. TAB 4: REINFORCEMENT LEARNING EXECUTION
-    # ==========================================
-    with tab4:
-        with st.sidebar:
-            st.subheader("💼 Trading Simulation")
-            sim_portfolio_size = st.number_input(
-                "Starting Portfolio (USD)", min_value=10_000, max_value=10_000_000,
-                value=100_000, step=10_000, key="sim_portfolio"
-            )
-            sim_transaction_cost = st.slider(
-                "Transaction Cost (Basis Points)", 1, 20, 2, key="sim_tc"
-            ) / 10_000
-            
-            st.markdown("---")
-            st.subheader("💥 Crash Stress-Test")
-            sim_crash_severity = st.slider(
-                "Crash Severity (%)", 10, 60, 35, key="sim_crash_pct"
-            ) / 100
-            st.caption(f"A {int(sim_crash_severity*100)}% drop simulated over 20 days")
-
-        st.subheader("🤖 The Trading Robot: Auto-Protecting the Portfolio")
-        st.markdown(
-            "While the first tab just calculates the *math* of the options, "
-            "this tab is about **actually trading them**. "
-            "We gave an AI a simulated portfolio. It looks at the options, but it also considers real-world costs like **Trading Fees (Bid/Ask Spreads)**. It then learns when to trade and when to sit still so it doesn't waste all your money on transaction costs."
+# ==========================================
+# 6. PAGE 4: REINFORCEMENT LEARNING EXECUTION
+# ==========================================
+elif active_page == "🤖 Auto-Trading AI":
+    with st.sidebar:
+        st.subheader("💼 Trading Simulation")
+        sim_portfolio_size = st.number_input(
+            "Starting Portfolio (USD)", min_value=10_000, max_value=10_000_000,
+            value=100_000, step=10_000, key="sim_portfolio"
         )
+        sim_transaction_cost = st.slider(
+            "Transaction Cost (Basis Points)", 1, 20, 2, key="sim_tc"
+        ) / 10_000
         
-        try:
-            from stable_baselines3 import PPO
-            HAS_SB3 = True
-        except ImportError:
-            HAS_SB3 = False
-            
-        @st.cache_resource
-        def load_rl_agent(path):
-            return PPO.load(path)
-            
-        if not HAS_SB3:
-            st.error("Deep Learning Pipeline Unmounted: Run `pip install stable-baselines3 gymnasium`")
-        else:
-            ppo_path = os.path.join(BASE_DIR, "Data", "PPO_Frictional_Agent.zip")
-            if not os.path.exists(ppo_path):
-                st.warning("⚠️ **RL Brain Training in Progress!** We detected the Terminal process is actively compiling the Frictional Policy Network right now. Please wait 60 seconds and refresh this tab!")
-            else:
-                rl_agent = load_rl_agent(ppo_path)
-                st.success("✅ The Trading Robot is active. It is now factoring in real-world trading fees.")
-                
-                # We iteratively playback the LIVE Trailing 20-Day options path chronologically to force Hedge Rebalancing.
-                bsde_deltas = []
-                rl_actions = []
-                inventory = 0.0
-                
-                # We use the live path up to `i` iteratively to mimic the rolling neural memory state
-                for i in range(20):
-                    term = 1.0 - (i / 20.0) # Shrinking time to expiration iteratively
-                    current_spot = trail_S[i]
-                    current_vol = trail_V[i]
-                    
-                    # Dynamically slice memory path from older ticks up to the simulated 'current' tick
-                    # For strict 20-dim input, we pad the leading edge with the earliest available tick
-                    rolling_S = np.concatenate([np.full(20 - i - 1, trail_S[0]), trail_S[:i+1]])
-                    rolling_V = np.concatenate([np.full(20 - i - 1, trail_V[0]), trail_V[:i+1]])
-                    
-                    s_scaled_rolling = spot_scaler.transform(rolling_S.reshape(-1,1)).flatten()
-                    
-                    path_tnsr_rl = torch.tensor(np.stack([s_scaled_rolling, rolling_V], axis=-1), dtype=torch.float32).unsqueeze(0).to(device)
-                    path_tnsr_rl.requires_grad_(True)
-                    
-                    # Lock Strike constraint to ATM at the start of the 20 periods
-                    k_norm = strike_scaler.transform(np.array([[trail_S[0]]]))[0,0]
-                    cont_tnsr_rl = torch.tensor([[term, k_norm]], dtype=torch.float32).to(device)
-                    
-                    val, _ = model(path_tnsr_rl, cont_tnsr_rl)
-                    
-                    delta_grad = torch.autograd.grad(val, path_tnsr_rl, grad_outputs=torch.ones_like(val), create_graph=False)[0]
-                    
-                    # Extract True Path-Wise Delta Sum linearly across the entire memory sequence 
-                    raw_delta = delta_grad[0, :, 0].sum().item()
-                    phys_delta = raw_delta * (price_scaler.scale_[0] / spot_scaler.scale_[0])
-                    
-                    # Normalize strictly to [0.0, 1.0] formal Neural bounds
-                    phys_delta = np.clip(np.abs(phys_delta), 0.01, 0.99)
-                    
-                    path_tnsr_rl.requires_grad_(False)
-                    bsde_deltas.append(phys_delta)
-                    
-                    # RL Observation Space: (Spot is normalized by starting tick of trajectory)
-                    normalized_spot = current_spot / rolling_S[0]
-                    obs = np.array([term, normalized_spot, phys_delta, inventory], dtype=np.float32)
-                    
-                    action, _ = rl_agent.predict(obs, deterministic=True)
-                    target_hedge = np.clip(action[0], 0.0, 1.0)
-                    rl_actions.append(target_hedge)
-                    inventory = target_hedge
-                    
-                fig_ai = go.Figure()
-                time_indices = np.arange(-19, 1) # Display trailing context T-20 to Today
-                fig_ai.add_trace(go.Scatter(x=time_indices, y=bsde_deltas, mode='lines+markers', name='AI Target Risk Level (Zero Fees)', line=dict(color='#00ffcc', width=2)))
-                fig_ai.add_trace(go.Scatter(x=time_indices, y=rl_actions, mode='lines+markers', name='Trading Robot Reality (With Fees)', line=dict(color='#ff007f', width=2)))
-                
-                fig_ai.update_layout(
-                    title="Real-Time 20-Day Trading Simulation: Watch the Robot save money by trading less",
-                    xaxis_title="Days Leading Up To Today (0)",
-                    yaxis_title="Amount of Stock Held in Portfolio (0% to 100%)",
-                    template="plotly_dark",
-                    height=500,
-                    margin=dict(l=0, r=0, t=50, b=0),
-                    legend=dict(yanchor="bottom", y=-0.3, xanchor="center", x=0.5, orientation="h")
-                )
-                
-                st.plotly_chart(fig_ai, use_container_width=True)
-                st.info(
-                    "**What are these two lines?**\n\n"
-                    "🟢 **Green Line — 'AI Target Risk Level':** What our AI says the *perfect* amount of S&P 500 stock to hold each day is.\n\n"
-                    "🩷 **Pink Line — 'Trading Robot Reality':** What the Trading Robot *actually* decided to hold after factoring in real-world **transaction fees**. It deliberately holds slightly less to avoid wasting money on unnecessary trades.\n\n"
-                    "*The gap between the lines = fees saved by trading less. A flat pink line near zero means the robot stayed out of the market entirely to avoid costs.*"
-                )
-                
-                # ==========================================
-                # SIMULATED PORTFOLIO VALUE CHART
-                # ==========================================
-                st.markdown("---")
-                st.subheader("💰 Simulated Portfolio Dollar Value")
-                st.caption(f"Starting with a portfolio of **{sim_portfolio_size:,.0f} USD** and watching how each strategy performs over the 20 days.")
-                
-                PORTFOLIO_START = sim_portfolio_size
-                portfolio_robot = [PORTFOLIO_START]
-                portfolio_unhedged = [PORTFOLIO_START]  # Just holds 100% stock all the time
-                transaction_cost_rate = sim_transaction_cost
-                
-                prev_robot_holding = 0.0
-                for i in range(1, 20):
-                    price_now = trail_S[i]
-                    price_prev = trail_S[i - 1]
-                    price_change_pct = (price_now - price_prev) / price_prev
-                    
-                    # Robot portfolio: hold what the robot decided yesterday
-                    robot_holding = rl_actions[i - 1]
-                    trade_cost = abs(robot_holding - prev_robot_holding) * transaction_cost_rate * portfolio_robot[-1]
-                    robot_pnl = robot_holding * price_change_pct * portfolio_robot[-1] - trade_cost
-                    portfolio_robot.append(portfolio_robot[-1] + robot_pnl)
-                    prev_robot_holding = robot_holding
-                    
-                    # Unhedged: always fully invested (100% stock)
-                    portfolio_unhedged.append(portfolio_unhedged[-1] * (1 + price_change_pct))
-                
-                fig_port = go.Figure()
-                
-                # Shaded region showing exactly HOW MUCH the robot saved
-                fig_port.add_trace(go.Scatter(
-                    x=time_indices, y=portfolio_robot,
-                    mode='lines+markers', name='🤖 Robot Portfolio (Fee-Aware)',
-                    fill=None,
-                    line=dict(color='#00ffcc', width=3)
-                ))
-                fig_port.add_trace(go.Scatter(
-                    x=time_indices, y=portfolio_unhedged,
-                    mode='lines+markers', name='📉 Unhedged (100% Stock)',
-                    fill='tonexty', fillcolor='rgba(255,51,51,0.15)',
-                    line=dict(color='#ff3333', width=2, dash='dash')
-                ))
-                fig_port.add_hline(y=PORTFOLIO_START, line_dash="dot", line_color="#555",
-                                   annotation_text="$100K Starting Value", annotation_position="bottom right")
-                
-                # Zoomed Y-range: ±3% around starting value to make differences visible
-                all_vals = portfolio_robot + portfolio_unhedged
-                y_min = min(all_vals) * 0.9985
-                y_max = max(all_vals) * 1.0015
-                
-                fig_port.update_layout(
-                    title="Portfolio Dollar Value: Robot vs Fully Unhedged (20-Day Real Market)",
-                    xaxis_title="Days Leading Up To Today (0)",
-                    yaxis_title="Portfolio Value ($)",
-                    yaxis=dict(tickformat="$,.0f", range=[y_min, y_max]),
-                    template="plotly_dark",
-                    height=400,
-                    margin=dict(l=0, r=0, t=50, b=0),
-                    legend=dict(yanchor="bottom", y=-0.35, xanchor="center", x=0.5, orientation="h")
-                )
-                
-                st.plotly_chart(fig_port, use_container_width=True)
-                st.info(
-                    "**What does this chart show?**\n\n"
-                    "Both strategies start with **100,000 USD**. The chart is zoomed tightly into the actual dollar range so small differences are clearly visible.\n\n"
-                    "🟢 **Green Line (Robot Portfolio):** The robot holdings.\n\n"
-                    "🔴 **Red Dashed Line (Unhedged / 100% Stock):** This investor put all their money into the stock market.\n\n"
-                    "*The shaded red zone between the lines = the money the robot saved by not being fully exposed to the market.*"
-                )
-                
-                # Summary metrics
-                robot_return = (portfolio_robot[-1] - PORTFOLIO_START) / PORTFOLIO_START * 100
-                unhedged_return = (portfolio_unhedged[-1] - PORTFOLIO_START) / PORTFOLIO_START * 100
-                col_m1, col_m2, col_m3 = st.columns(3)
-                col_m1.metric("Robot Final Value", f"${portfolio_robot[-1]:,.0f}", f"{robot_return:+.2f}%")
-                col_m2.metric("Unhedged Final Value", f"${portfolio_unhedged[-1]:,.0f}", f"{unhedged_return:+.2f}%")
-                col_m3.metric("Capital Saved vs Unhedged", f"${portfolio_robot[-1] - portfolio_unhedged[-1]:+,.0f}")
-                
-                # ==========================================
-                # CRASH SCENARIO vs INDUSTRY BASELINES
-                # ==========================================
-                st.markdown("---")
-                crash_pct_display = int(sim_crash_severity * 100)
-                st.subheader(f"🔴 What If a {crash_pct_display}% Crash Hit Tomorrow?")
-                st.markdown(
-                    f"Below we stress-test all strategies against a simulated **{crash_pct_display}% market crash over 20 days** "
-                    f"(you can adjust severity in the sidebar). Starting portfolio: **{sim_portfolio_size:,.0f} USD**."
-                )
-                
-                with st.expander("💡 What does 'Hedged' vs 'Unhedged' mean? (Click to read)"):
-                    st.markdown("""
-                    **🔓 Unhedged** means you put all your money into the stock market and just watch it fall.  
-                    If the S&P 500 drops 35%, you lose 35% of your money. No safety net.
+        st.markdown("---")
+        st.subheader("💥 Crash Stress-Test")
+        sim_crash_severity = st.slider(
+            "Crash Severity (%)", 10, 60, 35, key="sim_crash_pct"
+        ) / 100
+        st.caption(f"A {int(sim_crash_severity*100)}% drop simulated over 20 days")
 
-                    **🔒 Hedged** means you only hold a *portion* of your money in stocks.  
-                    The smaller your holding, the less you lose during a crash — but you also gain less during good times.
+    st.subheader("🤖 The Trading Robot: Auto-Protecting the Portfolio")
+    st.markdown(
+        "While the first tab just calculates the *math* of the options, "
+        "this tab is about **actually trading them**. "
+        "We gave an AI a simulated portfolio. It looks at the options, but it also considers real-world costs like **Trading Fees (Bid/Ask Spreads)**. It then learns when to trade and when to sit still so it doesn't waste all your money on transaction costs."
+    )
+    
+    try:
+        from stable_baselines3 import PPO
+        HAS_SB3 = True
+    except ImportError:
+        HAS_SB3 = False
+        
+    @st.cache_resource
+    def load_rl_agent(path):
+        return PPO.load(path)
+        
+    if not HAS_SB3:
+        st.error("Deep Learning Pipeline Unmounted: Run `pip install stable-baselines3 gymnasium`")
+    else:
+        ppo_path = os.path.join(BASE_DIR, "Data", "PPO_Frictional_Agent.zip")
+        if not os.path.exists(ppo_path):
+            st.warning("⚠️ **RL Brain Training in Progress!** We detected the Terminal process is actively compiling the Frictional Policy Network right now. Please wait 60 seconds and refresh this tab!")
+        else:
+            rl_agent = load_rl_agent(ppo_path)
+            st.success("✅ The Trading Robot is active. It is now factoring in real-world trading fees.")
+            
+            # We iteratively playback the LIVE Trailing 20-Day options path chronologically to force Hedge Rebalancing.
+            bsde_deltas = []
+            rl_actions = []
+            inventory = 0.0
+            
+            # We use the live path up to `i` iteratively to mimic the rolling neural memory state
+            for i in range(20):
+                term = 1.0 - (i / 20.0) # Shrinking time to expiration iteratively
+                current_spot = trail_S[i]
+                current_vol = trail_V[i]
+                
+                # Dynamically slice memory path from older ticks up to the simulated 'current' tick
+                # For strict 20-dim input, we pad the leading edge with the earliest available tick
+                rolling_S = np.concatenate([np.full(20 - i - 1, trail_S[0]), trail_S[:i+1]])
+                rolling_V = np.concatenate([np.full(20 - i - 1, trail_V[0]), trail_V[:i+1]])
+                
+                s_scaled_rolling = spot_scaler.transform(rolling_S.reshape(-1,1)).flatten()
+                
+                path_tnsr_rl = torch.tensor(np.stack([s_scaled_rolling, rolling_V], axis=-1), dtype=torch.float32).unsqueeze(0).to(device)
+                path_tnsr_rl.requires_grad_(True)
+                
+                # Lock Strike constraint to ATM at the start of the 20 periods
+                k_norm = strike_scaler.transform(np.array([[trail_S[0]]]))[0,0]
+                cont_tnsr_rl = torch.tensor([[term, k_norm]], dtype=torch.float32).to(device)
+                
+                val, _ = model(path_tnsr_rl, cont_tnsr_rl)
+                
+                delta_grad = torch.autograd.grad(val, path_tnsr_rl, grad_outputs=torch.ones_like(val), create_graph=False)[0]
+                
+                # Extract True Path-Wise Delta Sum linearly across the entire memory sequence 
+                raw_delta = delta_grad[0, :, 0].sum().item()
+                phys_delta = raw_delta * (price_scaler.scale_[0] / spot_scaler.scale_[0])
+                
+                # Normalize strictly to [0.0, 1.0] formal Neural bounds
+                phys_delta = np.clip(np.abs(phys_delta), 0.01, 0.99)
+                
+                path_tnsr_rl.requires_grad_(False)
+                bsde_deltas.append(phys_delta)
+                
+                # RL Observation Space: (Spot is normalized by starting tick of trajectory)
+                normalized_spot = current_spot / rolling_S[0]
+                obs = np.array([term, normalized_spot, phys_delta, inventory], dtype=np.float32)
+                
+                action, _ = rl_agent.predict(obs, deterministic=True)
+                target_hedge = np.clip(action[0], 0.0, 1.0)
+                rl_actions.append(target_hedge)
+                inventory = target_hedge
+                
+            fig_ai = go.Figure()
+            time_indices = np.arange(-19, 1) # Display trailing context T-20 to Today
+            fig_ai.add_trace(go.Scatter(x=time_indices, y=bsde_deltas, mode='lines+markers', name='AI Target Risk Level (Zero Fees)', line=dict(color='#00ffcc', width=2)))
+            fig_ai.add_trace(go.Scatter(x=time_indices, y=rl_actions, mode='lines+markers', name='Trading Robot Reality (With Fees)', line=dict(color='#ff007f', width=2)))
+            
+            fig_ai.update_layout(
+                title="Real-Time 20-Day Trading Simulation: Watch the Robot save money by trading less",
+                xaxis_title="Days Leading Up To Today (0)",
+                yaxis_title="Amount of Stock Held in Portfolio (0% to 100%)",
+                template="plotly_dark",
+                height=500,
+                margin=dict(l=0, r=0, t=50, b=0),
+                legend=dict(yanchor="bottom", y=-0.3, xanchor="center", x=0.5, orientation="h")
+            )
+            
+            st.plotly_chart(fig_ai, use_container_width=True)
+            st.info(
+                "**What are these two lines?**\n\n"
+                "🟢 **Green Line — 'AI Target Risk Level':** What our AI says the *perfect* amount of S&P 500 stock to hold each day is.\n\n"
+                "🩷 **Pink Line — 'Trading Robot Reality':** What the Trading Robot *actually* decided to hold after factoring in real-world **transaction fees**. It deliberately holds slightly less to avoid wasting money on unnecessary trades.\n\n"
+                "*The gap between the lines = fees saved by trading less. A flat pink line near zero means the robot stayed out of the market entirely to avoid costs.*"
+            )
+            
+            # ==========================================
+            # SIMULATED PORTFOLIO VALUE CHART
+            # ==========================================
+            st.markdown("---")
+            st.subheader("💰 Simulated Portfolio Dollar Value")
+            st.caption(f"Starting with a portfolio of **{sim_portfolio_size:,.0f} USD** and watching how each strategy performs over the 20 days.")
+            
+            PORTFOLIO_START = sim_portfolio_size
+            portfolio_robot = [PORTFOLIO_START]
+            portfolio_unhedged = [PORTFOLIO_START]  # Just holds 100% stock all the time
+            transaction_cost_rate = sim_transaction_cost
+            
+            prev_robot_holding = 0.0
+            for i in range(1, 20):
+                price_now = trail_S[i]
+                price_prev = trail_S[i - 1]
+                price_change_pct = (price_now - price_prev) / price_prev
+                
+                # Robot portfolio: hold what the robot decided yesterday
+                robot_holding = rl_actions[i - 1]
+                trade_cost = abs(robot_holding - prev_robot_holding) * transaction_cost_rate * portfolio_robot[-1]
+                robot_pnl = robot_holding * price_change_pct * portfolio_robot[-1] - trade_cost
+                portfolio_robot.append(portfolio_robot[-1] + robot_pnl)
+                prev_robot_holding = robot_holding
+                
+                # Unhedged: always fully invested (100% stock)
+                portfolio_unhedged.append(portfolio_unhedged[-1] * (1 + price_change_pct))
+            
+            fig_port = go.Figure()
+            
+            # Shaded region showing exactly HOW MUCH the robot saved
+            fig_port.add_trace(go.Scatter(
+                x=time_indices, y=portfolio_robot,
+                mode='lines+markers', name='🤖 Robot Portfolio (Fee-Aware)',
+                fill=None,
+                line=dict(color='#00ffcc', width=3)
+            ))
+            fig_port.add_trace(go.Scatter(
+                x=time_indices, y=portfolio_unhedged,
+                mode='lines+markers', name='📉 Unhedged (100% Stock)',
+                fill='tonexty', fillcolor='rgba(255,51,51,0.15)',
+                line=dict(color='#ff3333', width=2, dash='dash')
+            ))
+            fig_port.add_hline(y=PORTFOLIO_START, line_dash="dot", line_color="#555",
+                               annotation_text=f"${PORTFOLIO_START:,.0f} Starting Value", annotation_position="bottom right")
+
+            
+            # Zoomed Y-range: ±3% around starting value to make differences visible
+            all_vals = portfolio_robot + portfolio_unhedged
+            y_min = min(all_vals) * 0.9985
+            y_max = max(all_vals) * 1.0015
+            
+            fig_port.update_layout(
+                title="Portfolio Dollar Value: Robot vs Fully Unhedged (20-Day Real Market)",
+                xaxis_title="Days Leading Up To Today (0)",
+                yaxis_title="Portfolio Value ($)",
+                yaxis=dict(tickformat="$,.0f", range=[y_min, y_max]),
+                template="plotly_dark",
+                height=400,
+                margin=dict(l=0, r=0, t=50, b=0),
+                legend=dict(yanchor="bottom", y=-0.35, xanchor="center", x=0.5, orientation="h")
+            )
+            
+            st.plotly_chart(fig_port, use_container_width=True)
+            st.info(
+                "**What does this chart show?**\n\n"
+                "Both strategies start with **100,000 USD**. The chart is zoomed tightly into the actual dollar range so small differences are clearly visible.\n\n"
+                "🟢 **Green Line (Robot Portfolio):** The robot holdings.\n\n"
+                "🔴 **Red Dashed Line (Unhedged / 100% Stock):** This investor put all their money into the stock market.\n\n"
+                "*The shaded red zone between the lines = the money the robot saved by not being fully exposed to the market.*"
+            )
+            
+            # Summary metrics
+            robot_return = (portfolio_robot[-1] - PORTFOLIO_START) / PORTFOLIO_START * 100
+            unhedged_return = (portfolio_unhedged[-1] - PORTFOLIO_START) / PORTFOLIO_START * 100
+            col_m1, col_m2, col_m3 = st.columns(3)
+            col_m1.metric("Robot Final Value", f"${portfolio_robot[-1]:,.0f}", f"{robot_return:+.2f}%")
+            col_m2.metric("Unhedged Final Value", f"${portfolio_unhedged[-1]:,.0f}", f"{unhedged_return:+.2f}%")
+            col_m3.metric("Capital Saved vs Unhedged", f"${portfolio_robot[-1] - portfolio_unhedged[-1]:+,.0f}")
+            
+            # ==========================================
+            # CRASH SCENARIO vs INDUSTRY BASELINES
+            # ==========================================
+            st.markdown("---")
+            crash_pct_display = int(sim_crash_severity * 100)
+            st.subheader(f"🔴 What If a {crash_pct_display}% Crash Hit Tomorrow?")
+            st.markdown(
+                f"Below we stress-test all strategies against a simulated **{crash_pct_display}% market crash over 20 days** "
+                f"(you can adjust severity in the sidebar). Starting portfolio: **{sim_portfolio_size:,.0f} USD**."
+            )
+            
+            with st.expander("💡 What does 'Hedged' vs 'Unhedged' mean? (Click to read)"):
+                st.markdown("""
+                **🔓 Unhedged** means you put all your money into the stock market and just watch it fall.  
+                If the S&P 500 drops 35%, you lose 35% of your money. No safety net.
+
+                **🔒 Hedged** means you only hold a *portion* of your money in stocks.  
+                The smaller your holding, the less you lose during a crash — but you also gain less during good times.
+                
+                The goal of the AI Robot is to find the *smartest* holding percentage each day:
+                - Hold **enough** stock to grow with the market on good days
+                - Hold **little enough** to stay safe during crashes
+                
+                > **Static 50% Hedge** = Blindly holds 50% stock every day — no intelligence, no adjustment.  
+                > **Black-Scholes / SABR** = Banks' math formulas that adjust the holding based on standard volatility calculations.  
+                > **AI Robot** = Uses 20 days of market memory + real trading fee costs to decide holding each day.
+                """)
+            
+            # Build crash price path from sidebar severity setting
+            n_crash = 21
+            crash_prices = S_live * np.linspace(1.0, 1.0 - sim_crash_severity, n_crash)
+            crash_returns = np.diff(crash_prices) / crash_prices[:-1]
+            crash_days_x = np.arange(n_crash)
+            
+            INIT = sim_portfolio_size
+            # Each strategy: [name, color, dash, fixed_holding or None for dynamic]
+            strategy_specs = [
+                ("🤖 AI Robot (Our System)",       "#00ffcc", "solid",   "robot"),  # dynamic via rl_agent
+                ("📐 Black-Scholes Delta Hedge",   "#ff3333", "dash",    None),    # dynamic via bs_delta
+                ("📊 SABR Delta Hedge",            "#2f81f7", "dash",    None),    # dynamic via sabr
+                ("⚖️ Static 50% Hedge",            "#ff00ff", "dashdot", 0.50),
+                ("📉 Fully Unhedged (100% Stock)", "#888888", "dot",     1.00),
+            ]
+            
+            crash_inventories = {name: 0.0 for name, *_ in strategy_specs}
+            crash_portfolios = {name: [INIT] for name, *_ in strategy_specs}
+            
+            for day_i, day_ret in enumerate(crash_returns):
+                S_crash_now = crash_prices[day_i]
+                T_crash_rem = max(1.0 - day_i / 20.0, 1e-3)
+                
+                for (name, color, dash, fixed_h) in strategy_specs:
+                    prev_val = crash_portfolios[name][-1]
                     
-                    The goal of the AI Robot is to find the *smartest* holding percentage each day:
-                    - Hold **enough** stock to grow with the market on good days
-                    - Hold **little enough** to stay safe during crashes
+                    if fixed_h == "robot":
+                        # Dynamic: ask the robot what to hold given current crash state
+                        norm_spot = S_crash_now / S_live  # ratio from crash start
+                        robot_delta_target = np.clip(0.10 + (norm_spot - 1.0) * 0.5, 0.05, 0.25)
+                        crash_obs = np.array([T_crash_rem, norm_spot, robot_delta_target, crash_inventories[name]], dtype=np.float32)
+                        crash_action, _ = rl_agent.predict(crash_obs, deterministic=True)
+                        h = np.clip(crash_action[0], 0.0, 1.0)
+                        # Floor: real trading robots never sit at exactly 0%.
+                        # If model hasn't fully converged, fall back to the target delta.
+                        if h < robot_delta_target * 0.5:
+                            h = robot_delta_target
+                        crash_inventories[name] = h
+                    elif fixed_h is not None:
+                        h = fixed_h
+                    elif "Black-Scholes" in name:
+                        h = bs_delta(S_crash_now, S_live, T_crash_rem, r_val, np.sqrt(V_live) * bsm_vol_mult)
+                    else:  # SABR
+                        sv = sabr_implied_vol(S_crash_now, S_live, T_crash_rem, sabr_alpha, sabr_beta, sabr_rho, sabr_nu)
+                        h = bs_delta(S_crash_now, S_live, T_crash_rem, r_val, sv)
                     
-                    > **Static 50% Hedge** = Blindly holds 50% stock every day — no intelligence, no adjustment.  
-                    > **Black-Scholes / SABR** = Banks' math formulas that adjust the holding based on standard volatility calculations.  
-                    > **AI Robot** = Uses 20 days of market memory + real trading fee costs to decide holding each day.
-                    """)
-                
-                # Build crash price path from sidebar severity setting
-                n_crash = 21
-                crash_prices = S_live * np.linspace(1.0, 1.0 - sim_crash_severity, n_crash)
-                crash_returns = np.diff(crash_prices) / crash_prices[:-1]
-                crash_days_x = np.arange(n_crash)
-                
-                INIT = sim_portfolio_size
-                # Each strategy: [name, color, dash, fixed_holding or None for dynamic]
-                strategy_specs = [
-                    ("🤖 AI Robot (Our System)",       "#00ffcc", "solid",   "robot"),  # dynamic via rl_agent
-                    ("📐 Black-Scholes Delta Hedge",   "#ff3333", "dash",    None),    # dynamic via bs_delta
-                    ("📊 SABR Delta Hedge",            "#2f81f7", "dash",    None),    # dynamic via sabr
-                    ("⚖️ Static 50% Hedge",            "#ff00ff", "dashdot", 0.50),
-                    ("📉 Fully Unhedged (100% Stock)", "#888888", "dot",     1.00),
-                ]
-                
-                crash_inventories = {name: 0.0 for name, *_ in strategy_specs}
-                crash_portfolios = {name: [INIT] for name, *_ in strategy_specs}
-                
-                for day_i, day_ret in enumerate(crash_returns):
-                    S_crash_now = crash_prices[day_i]
-                    T_crash_rem = max(1.0 - day_i / 20.0, 1e-3)
-                    
-                    for (name, color, dash, fixed_h) in strategy_specs:
-                        prev_val = crash_portfolios[name][-1]
-                        
-                        if fixed_h == "robot":
-                            # Dynamic: ask the robot what to hold given current crash state
-                            norm_spot = S_crash_now / S_live  # ratio from crash start
-                            robot_delta_target = np.clip(0.10 + (norm_spot - 1.0) * 0.5, 0.05, 0.25)
-                            crash_obs = np.array([T_crash_rem, norm_spot, robot_delta_target, crash_inventories[name]], dtype=np.float32)
-                            crash_action, _ = rl_agent.predict(crash_obs, deterministic=True)
-                            h = np.clip(crash_action[0], 0.0, 1.0)
-                            # Floor: real trading robots never sit at exactly 0%.
-                            # If model hasn't fully converged, fall back to the target delta.
-                            if h < robot_delta_target * 0.5:
-                                h = robot_delta_target
-                            crash_inventories[name] = h
-                        elif fixed_h is not None:
-                            h = fixed_h
-                        elif "Black-Scholes" in name:
-                            h = bs_delta(S_crash_now, S_live, T_crash_rem, r_val, np.sqrt(V_live) * bsm_vol_mult)
-                        else:  # SABR
-                            sv = sabr_implied_vol(S_crash_now, S_live, T_crash_rem, sabr_alpha, sabr_beta, sabr_rho, sabr_nu)
-                            h = bs_delta(S_crash_now, S_live, T_crash_rem, r_val, sv)
-                        
-                        h = np.clip(h, 0.0, 1.0)
-                        crash_portfolios[name].append(prev_val * (1.0 + h * day_ret))
-                
-                fig_crash_cmp = go.Figure()
-                for (name, color, dash, _) in strategy_specs:
-                    fig_crash_cmp.add_trace(go.Scatter(
-                        x=crash_days_x, y=crash_portfolios[name],
-                        mode='lines', name=name,
-                        line=dict(color=color, dash=dash, width=3 if "Robot" in name else 2)
-                    ))
-                
-                fig_crash_cmp.add_hline(y=INIT, line_dash="dot", line_color="#555",
-                                        annotation_text="$100K Starting Value", annotation_position="bottom right")
-                fig_crash_cmp.update_layout(
-                    title="Portfolio Survival: 35% Crash Simulation — Who Loses the Least?",
-                    xaxis_title="Days Into the Crash",
-                    yaxis_title="Portfolio Value ($)",
-                    yaxis_tickformat="$,.0f",
-                    template="plotly_dark",
-                    height=450,
-                    margin=dict(l=0, r=0, t=50, b=0),
-                    legend=dict(yanchor="top", y=-0.15, xanchor="center", x=0.5, orientation="h")
-                )
-                st.plotly_chart(fig_crash_cmp, use_container_width=True)
-                
-                # Summary comparison table
-                st.markdown("**💀 Losses After the Full 35% Crash:**")
-                cols = st.columns(len(strategy_specs))
-                for col, (name, color, dash, _) in zip(cols, strategy_specs):
-                    final_val = crash_portfolios[name][-1]
-                    loss = final_val - INIT
-                    col.metric(name.split("(")[0].strip(), f"${final_val:,.0f}", f"{loss:+,.0f}")
+                    h = np.clip(h, 0.0, 1.0)
+                    crash_portfolios[name].append(prev_val * (1.0 + h * day_ret))
+            
+            fig_crash_cmp = go.Figure()
+            for (name, color, dash, _) in strategy_specs:
+                fig_crash_cmp.add_trace(go.Scatter(
+                    x=crash_days_x, y=crash_portfolios[name],
+                    mode='lines', name=name,
+                    line=dict(color=color, dash=dash, width=3 if "Robot" in name else 2)
+                ))
+            
+            fig_crash_cmp.add_hline(y=INIT, line_dash="dot", line_color="#555",
+                                    annotation_text=f"${INIT:,.0f} Starting Value", annotation_position="bottom right")
+            fig_crash_cmp.update_layout(
+                title=f"Portfolio Survival: {crash_pct_display}% Crash Simulation — Who Loses the Least?",
+                xaxis_title="Days Into the Crash",
+                yaxis_title="Portfolio Value ($)",
+                yaxis_tickformat="$,.0f",
+                template="plotly_dark",
+                height=450,
+                margin=dict(l=0, r=0, t=50, b=0),
+                legend=dict(yanchor="top", y=-0.15, xanchor="center", x=0.5, orientation="h")
+            )
+            st.plotly_chart(fig_crash_cmp, use_container_width=True)
+            
+            # Summary comparison table
+            st.markdown(f"**💀 Losses After the Full {crash_pct_display}% Crash:**")
+
+            cols = st.columns(len(strategy_specs))
+            for col, (name, color, dash, _) in zip(cols, strategy_specs):
+                final_val = crash_portfolios[name][-1]
+                loss = final_val - INIT
+                col.metric(name.split("(")[0].strip(), f"${final_val:,.0f}", f"{loss:+,.0f}")
