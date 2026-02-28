@@ -138,40 +138,43 @@ This dashboard shows how modern **Artificial Intelligence (Deep Learning)** can 
 ***How it works:*** The AI watches the last 20 days of the S&P 500's real behavior (including momentum and panic patterns). At the same time, we run the traditional banking formulas, which only look at today's price. Here you can see them battle head-to-head to price options correctly.
 """)
 
-# ── DEFAULT values (used when a tab's panel is not active) ──────────────────
+# ── DEFAULT values ──────────────────
 sabr_alpha, sabr_beta, sabr_rho, sabr_nu = 0.4, 1.0, -0.6, 0.2
 bsm_vol_mult = 1.0
 dupire_a, dupire_b = -1.5, 0.5
 r_val = 0.05
 crash_scenario = "COVID-19 (Q1 2020)"
 crash_start, crash_end = "2020-01-01", "2020-06-01"
-heatmap_grid, heatmap_spot_pct = 15, 20   # Tab 3 fixed defaults
+heatmap_grid, heatmap_spot_pct = 15, 20
 sim_portfolio_size = 100_000
 sim_transaction_cost = 0.0002
 sim_crash_severity = 0.35
 
-# SIDEBAR — dynamic per-tab controls
+# Permanent Sidebar Header
 with st.sidebar:
     st.header("⚙️ Dashboard Controls")
     st.markdown("**Index:** `^SPX` (S&P 500)")
     asset_selection = "^SPX"
-    
     if st.button("🔄 Reload All AI Data"):
         st.cache_data.clear()
         st.cache_resource.clear()
         st.rerun()
-    
     st.markdown("---")
-    
-    active_tab = st.radio(
-        "🗂️ Showing controls for:",
-        ["⚡ Live Option Pricing", "📉 Crash Simulator", "🤖 Auto-Trading AI"],
-        label_visibility="visible"
-    )
-    
-    st.markdown("---")
-    
-    if active_tab == "⚡ Live Option Pricing":
+
+
+
+# LOAD CONSTRAINTS
+S_live, V_live, trail_S, trail_V, intraday_df = ping_live_market(asset_selection)
+
+if S_live is None:
+    st.error("Live Web-Socket Connection to Market Exchange structurally failed.")
+    st.stop()
+
+tab1, tab2, tab3, tab4 = st.tabs(["⚡ Live Option Pricing", "📉 Crash Simulator", "🌐 AI Risk Heatmap", "🤖 Auto-Trading AI"])
+
+
+with tab1:
+    with st.sidebar:
         st.subheader("🏦 SABR Formula")
         st.caption("Controls the blue 3D pricing surface")
         sabr_alpha = st.slider("Volatility (Risk Level)", 0.01, 1.0, 0.4, key="sabr_alpha")
@@ -187,49 +190,7 @@ with st.sidebar:
         st.subheader("📉 Local Volatility (Dupire)")
         dupire_a = st.slider("Panic Curve", -5.0, 5.0, -1.5, key="dup_a")
         dupire_b = st.slider("Panic Acceleration", -1.0, 5.0, 0.5, key="dup_b")
-    
-    elif active_tab == "📉 Crash Simulator":
-        st.subheader("🕰️ Historical Scenario")
-        crash_scenario = st.selectbox(
-            "Choose a crash to study",
-            ["COVID-19 (Q1 2020)", "Financial Crisis (2008)", "Dot-Com Bust (2000–2002)"],
-            key="crash_scenario"
-        )
-        crash_start, crash_end = {
-            "COVID-19 (Q1 2020)":       ("2020-01-01", "2020-06-01"),
-            "Financial Crisis (2008)":   ("2008-06-01", "2009-06-01"),
-            "Dot-Com Bust (2000–2002)":  ("2000-03-01", "2002-12-01"),
-        }[crash_scenario]
-        st.caption(f"Showing data from {crash_start} → {crash_end}")
-    
-    elif active_tab == "🤖 Auto-Trading AI":
-        st.subheader("💼 Trading Simulation")
-        sim_portfolio_size = st.number_input(
-            "Starting Portfolio (USD)", min_value=10_000, max_value=10_000_000,
-            value=100_000, step=10_000, key="sim_portfolio"
-        )
-        sim_transaction_cost = st.slider(
-            "Transaction Cost (Basis Points)", 1, 20, 2, key="sim_tc"
-        ) / 10_000
-        
-        st.markdown("---")
-        st.subheader("💥 Crash Stress-Test")
-        sim_crash_severity = st.slider(
-            "Crash Severity (%)", 10, 60, 35, key="sim_crash_pct"
-        ) / 100
-        st.caption(f"A {int(sim_crash_severity*100)}% drop simulated over 20 days")
 
-
-# LOAD CONSTRAINTS
-S_live, V_live, trail_S, trail_V, intraday_df = ping_live_market(asset_selection)
-
-if S_live is None:
-    st.error("Live Web-Socket Connection to Market Exchange structurally failed.")
-    st.stop()
-
-tab1, tab2, tab3, tab4 = st.tabs(["⚡ Live Option Pricing", "📉 Crash Simulator", "🌐 AI Risk Heatmap", "🤖 Auto-Trading AI"])
-
-with tab1:
     col1, col2, col3 = st.columns(3)
     col1.metric("Live Stock Price ($)", f"{S_live:,.2f}")
     col2.metric("Market Panic Index (VIX %)", f"{np.sqrt(V_live)*100:.2f}%")
@@ -498,7 +459,21 @@ with tab1:
         """)
 
 with tab2:
-    st.header("📉 COVID-19 Historical Hedging Deviations")
+    with st.sidebar:
+        st.subheader("🕰️ Historical Scenario")
+        crash_scenario = st.selectbox(
+            "Choose a crash to study",
+            ["COVID-19 (Q1 2020)", "Financial Crisis (2008)", "Dot-Com Bust (2000–2002)"],
+            key="crash_scenario"
+        )
+        crash_start, crash_end = {
+            "COVID-19 (Q1 2020)":       ("2020-01-01", "2020-06-01"),
+            "Financial Crisis (2008)":   ("2008-06-01", "2009-06-01"),
+            "Dot-Com Bust (2000–2002)":  ("2000-03-01", "2002-12-01"),
+        }[crash_scenario]
+        st.caption(f"Showing data from {crash_start} → {crash_end}")
+
+    st.header("📉 Historical Hedging Deviations")
     
     backtest_path = os.path.join(BASE_DIR, "Data", "empirical_hedging_pnl.npy")
     spx_hist_path = os.path.join(BASE_DIR, "Data", "SPX_history.csv")
@@ -604,14 +579,29 @@ with tab3:
             
             The **Purplish Surface** is the AI calculating exact momentum changes.
             The **Transparent Red Surface** is what banks use.
-            
-            Notice how during Out-Of-The-Money intervals (market crashes), the AI physically flattens the curve to handle extreme constraints safely, while the old formulas just shoot into wildly incorrect risk approximations!
             ''')
 
     # ==========================================
     # 6. TAB 4: REINFORCEMENT LEARNING EXECUTION
     # ==========================================
     with tab4:
+        with st.sidebar:
+            st.subheader("💼 Trading Simulation")
+            sim_portfolio_size = st.number_input(
+                "Starting Portfolio (USD)", min_value=10_000, max_value=10_000_000,
+                value=100_000, step=10_000, key="sim_portfolio"
+            )
+            sim_transaction_cost = st.slider(
+                "Transaction Cost (Basis Points)", 1, 20, 2, key="sim_tc"
+            ) / 10_000
+            
+            st.markdown("---")
+            st.subheader("💥 Crash Stress-Test")
+            sim_crash_severity = st.slider(
+                "Crash Severity (%)", 10, 60, 35, key="sim_crash_pct"
+            ) / 100
+            st.caption(f"A {int(sim_crash_severity*100)}% drop simulated over 20 days")
+
         st.subheader("🤖 The Trading Robot: Auto-Protecting the Portfolio")
         st.markdown(
             "While the first tab just calculates the *math* of the options, "
