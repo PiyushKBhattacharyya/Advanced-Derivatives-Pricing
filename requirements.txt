@@ -13,3 +13,6 @@ scikit-learn
 streamlit>=1.35.0
 altair<5.0.0
 plotly
+ib_insync
+gymnasium
+stable-baselines3
