@@ -21,8 +21,8 @@ class FrictionalHedgingEnv(gym.Env):
         
         self.n_paths, self.n_steps = self.spx_paths.shape
         
-        # ACTION: The Agent chooses a continuous portfolio delta holding between [-1.0, 1.0]
-        self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32)
+        # ACTION: The Agent chooses a continuous portfolio delta holding between [0.0, 1.0]
+        self.action_space = spaces.Box(low=0.0, high=1.0, shape=(1,), dtype=np.float32)
         
         # OBSERVATION: [Time_Remaining, Current_Spot, Deep_BSDE_Delta, Current_Inventory]
         self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(4,), dtype=np.float32)
@@ -40,9 +40,11 @@ class FrictionalHedgingEnv(gym.Env):
         
     def _get_obs(self):
         t_rem = 1.0 - (self.current_step / float(self.n_steps))
-        S = self.spx_paths[self.current_path, self.current_step]
+        S_current = self.spx_paths[self.current_path, self.current_step]
+        S_start = self.spx_paths[self.current_path, 0]
+        S_norm = S_current / S_start
         delta_nn = self.bsde_deltas[self.current_path, self.current_step]
-        return np.array([t_rem, S, delta_nn, self.inventory], dtype=np.float32)
+        return np.array([t_rem, S_norm, delta_nn, self.inventory], dtype=np.float32)
         
     def step(self, action):
         target_inventory = action[0]
@@ -62,7 +64,7 @@ class FrictionalHedgingEnv(gym.Env):
         
         # 4. Risk Mitigation Penalty (Do not stray too far from the exact Neural Limit)
         optimal_delta = self.bsde_deltas[self.current_path, self.current_step]
-        risk_penalty = 1.0 * np.abs(target_inventory - optimal_delta)
+        risk_penalty = 8.0 * np.abs(target_inventory - optimal_delta)
         
         total_reward = step_reward - risk_penalty
         

@@ -92,41 +92,41 @@ def load_deep_bsde_infrastructure():
 # ==========================================
 # 2. THE DASHBOARD HEADER
 # ==========================================
-st.title("⚡ Deep BSDE vs Tier-1 Banking Infrastructure")
+st.title("⚡ AI vs Traditional Banking Limits")
 st.markdown("""
-Welcome to the Live Deep Hedging Analytics Terminal. 
-This architecture mathematically proves the superiority of **Non-Markovian Deep Learning** against rigid Legacy Banking PDEs (SABR).
+Welcome to the AI Hedging Terminal. 
+This dashboard shows how modern **Artificial Intelligence (Deep Learning)** can spot risks and price options better than the rigid math formulas Wall Street has used for 50 years.
 
-***How it works:*** The orchestrator continuously scrapes the live S&P 500 options exchange and feeds the trailing 20-day $[Spot, VIX]$ arrays physically into our PyTorch Neural Network. Simultaneously, it runs identical live parameters through the deterministic SABR algebraic approximation, superimposing the two limits directly against one another for arbitrage tracking.
+***How it works:*** The AI watches the last 20 days of the S&P 500's real behavior (including momentum and panic patterns). At the same time, we run the traditional banking formulas, which only look at today's price. Here you can see them battle head-to-head to price options correctly.
 """)
 
 # SIDEBAR PARAMETERS
 with st.sidebar:
-    st.header("⚙️ Desk Configurations")
-    st.markdown("**Underlying Asset:** `^SPX` (S&P 500 Index)")
+    st.header("⚙️ Dashboard Controls")
+    st.markdown("**Stock Market Index:** `^SPX` (S&P 500)")
     asset_selection = "^SPX"
-    st.caption("*(Note: Architecture restricted to ^SPX. Attempting to inject SPY American bounds into strictly European SPX Neural Network gradients causes StandardScaling out-of-bound errors.)*")
+    st.caption("*(Note: For now, this experimental AI is strictly trained on the S&P 500 index.)*")
     
     st.markdown("---")
-    st.subheader("🏦 Legacy SABR Matrix Calibration")
-    st.markdown("*(Adjust physical dynamics strictly affecting the banking baseline competitor)*")
-    sabr_alpha = st.slider("Alpha (vol-of-vol proxy)", 0.01, 1.0, 0.4)
-    sabr_beta = st.slider("Beta (forward-skew elast.)", 0.0, 1.0, 1.0)
-    sabr_rho = st.slider("Rho (spot-vol corr.)", -0.99, 0.99, -0.6)
-    sabr_nu = st.slider("Nu (volatility of alpha)", 0.01, 2.0, 0.2)
+    st.subheader("🏦 Bank Formula 1: SABR")
+    st.markdown("*(Tweak the math that creates the Transparent Blue surface)*")
+    sabr_alpha = st.slider("Volatility (Risk Level)", 0.01, 1.0, 0.4)
+    sabr_beta = st.slider("Price Connection to Risk", 0.0, 1.0, 1.0)
+    sabr_rho = st.slider("Market Drop Correlation", -0.99, 0.99, -0.6)
+    sabr_nu = st.slider("How Fast Volatility Changes", 0.01, 2.0, 0.2)
     
     st.markdown("---")
-    st.subheader("📊 Vanilla Baseline Calibration")
-    bsm_vol_mult = st.slider("BSM Live VIX Multiplier", 0.1, 3.0, 1.0)
+    st.subheader("📊 Bank Formula 2: Black-Scholes")
+    bsm_vol_mult = st.slider("Black-Scholes Risk Multiplier", 0.1, 3.0, 1.0)
     
     st.markdown("---")
-    st.subheader("📉 Dupire Skew Parameters")
-    dupire_a = st.slider("Dupire Smile Slope (a)", -5.0, 5.0, -1.5)
-    dupire_b = st.slider("Dupire Convexity (b)", -1.0, 5.0, 0.5)
+    st.subheader("📉 Bank Formula 3: Local Volatility")
+    dupire_a = st.slider("Panic Curve", -5.0, 5.0, -1.5)
+    dupire_b = st.slider("Panic Acceleration", -1.0, 5.0, 0.5)
     
     r_val = 0.05
     st.markdown("---")
-    if st.button("Force Synchronous Execution"):
+    if st.button("Reload AI Data"):
         st.cache_data.clear()
 
 # LOAD CONSTRAINTS
@@ -136,13 +136,13 @@ if S_live is None:
     st.error("Live Web-Socket Connection to Market Exchange structurally failed.")
     st.stop()
 
-tab1, tab2, tab3, tab4 = st.tabs(["⚡ Live Execution Hub", "📉 Historical Black Swan Simulator", "🌐 2nd-Order Neural Curvature", "🤖 RL Hedging Agent Execution"])
+tab1, tab2, tab3, tab4 = st.tabs(["⚡ Live Option Pricing", "📉 Crash Simulator", "🌐 AI Risk Heatmap", "🤖 Auto-Trading AI"])
 
 with tab1:
     col1, col2, col3 = st.columns(3)
-    col1.metric("Live Spot Price ($)", f"{S_live:,.2f}")
-    col2.metric("Live VIX (Volatility %)", f"{np.sqrt(V_live)*100:.2f}%")
-    col3.metric("Neural Memory Path", f"Trailing 20 Days")
+    col1.metric("Live Stock Price ($)", f"{S_live:,.2f}")
+    col2.metric("Market Panic Index (VIX %)", f"{np.sqrt(V_live)*100:.2f}%")
+    col3.metric("AI Memory Scope", f"Trailing 20 Days")
 
     # ==========================================
     # 2.5 TRADINGVIEW INTRADAY MARKET OVERVIEW
@@ -181,7 +181,7 @@ with tab1:
     # 3. INTERACTIVE 3D PRICING ENGINE
     # ==========================================
     st.markdown("---")
-    st.subheader("🛰️ Live 3D Pricing Grid Construction")
+    st.subheader("🛰️ AI vs Bank Price Estimation Map")
 
     with st.spinner("Compiling structural dual-surface geometries natively..."):
         # Build the 2D evaluation mesh covering localized bounds
@@ -260,12 +260,12 @@ with tab1:
         st.info("""
         **What are you looking at?**
 
-        This is the live Option Pricing surface mapping the forward limit. 
+        This 3D grid shows how much different options (bets on the stock market) should cost based on time and the stock's future price.
 
-        The **Red Surface** represents the Nobel-winning Black-Scholes assumption of static, flat volatility across all boundaries.
-        The **Transparent Blue Surface** represents the standard PDE banking limit (SABR). It relies entirely on static, instantaneous Spot data (Markovian) to create a 'smile' curve.
+        The **Red Surface** represents the Nobel-winning *Black-Scholes formula* from 1973. Notice how flat it is? It assumes the market is calm and predictable.
+        The **Transparent Blue Surface** represents what modern banks use (*SABR model*). It creates a "smile" curve, but it's blind—it only uses today's data and has no memory of the past.
 
-        The **Solid Heatmap** represents the Deep BSDE PyTorch network. Because it ingests the entire 20-day historical momentum (Non-Markovian), you can visually see it dynamically warping and adjusting option premiums based on how the volatility skew physically behaved recently—an edge traditional math cannot replicate!
+        The **Bright Solid Heatmap** is our AI. Because it remembers the *panic and momentum* of the last 20 days, you can actually see it warping and adjusting prices during extreme market events—something traditional math simply cannot do!
         """)
 
 
@@ -273,7 +273,7 @@ with tab1:
     # 3.5 REAL-TIME NEURAL GREEK SURFACE (DELTA)
     # ==========================================
     st.markdown("---")
-    st.subheader("🌋 3D Options Delta (Hedge Ratio) Extracted via Autograd")
+    st.subheader("🌋 The 'Speed of Risk' Map (AI Delta)")
     
     with st.spinner("Extracting hidden Neural Gradients (dy/dx)..."):
         # Shrink to 15x15 to guarantee extreme low-latency Streamlit rendering
@@ -333,22 +333,21 @@ with tab1:
         with col_delta_text:
             st.markdown("<br><br>", unsafe_allow_html=True)
             st.info('''
-            **What is Autograd doing?**
+            **What is this "Delta" chart?**
             
-            Instead of evaluating mathematical formulas, the dashboard explicitly forces PyTorch to take the abstract derivative of the Neural Network weights directly against the physical Live Spot constraint: $\\frac{\\partial C}{\\partial S}$.
+            This measures "Risk Speed" — how fast your option changes in value when the stock market moves by $1.
             
-            The **Green/Yellow Surface** illustrates the Deep BSDE intrinsic Delta mapped flawlessly in real-time.
-            The **Transparent Red Surface** illustrates the rigid Black-Scholes Delta.
-            The **Transparent Blue and Purple Surfaces** represent the legacy SABR and Local Volatility boundaries.
+            The **Green/Yellow Surface** is our AI's real-time risk map. 
+            The **Transparent Red, Blue, and Purple Surfaces** are what banks use today.
             
-            Notice how during Out-Of-The-Money (OTM) crash boundaries, the Neural Network intelligently dictates higher risk limits (diverging from banking formulas) because it intrinsically remembers COVID-19 extreme crash momentum!
+            Notice how at the edges (representing extreme crashes), the AI intelligently tells you to hold a different amount of risk than the banking formulas do. The AI does this because it remembers the exact speed the market moved during the COVID-19 panic!
             ''')
 
     # ==========================================
     # 4. CROSS-SECTIONAL VISUALIZATION SLICER
     # ==========================================
     st.markdown("---")
-    st.subheader("✂️ 2D Cross-Section Slicer (Interpolated Volatility Risk)")
+    st.subheader("✂️ See the AI's Edge (Price Slicer)")
 
     eval_maturity = st.slider("Dynamically Slice Maturity Boundary T (Years)", 0.05, 1.0, 0.25)
     sliced_k = np.linspace(S_live*0.8, S_live*1.2, 50)
@@ -398,13 +397,13 @@ with tab1:
     with col_2d_text:
         st.markdown("<br><br>", unsafe_allow_html=True)
         st.info("""
-        **Identifying the Arbitrage Edge**
+        **Spotting the AI's Edge**
 
-        This 2D graph slices explicitly through the 3D block above at the exact maturity selected.
+        We just sliced the 3D block above in half to look at a single specific time limit (maturity).
 
-        Notice how the **Red Dotted Line** (Black-Scholes) is completely flat and blind to risk. The **Purple / Blue Dashed Lines** (Local Vol / SABR) mathematically curve but ultimately straight-line toward zero for extreme strikes because they cannot comprehend momentum panic.
+        Notice how the **Red Dotted Line** (the old Black-Scholes formula) is completely flat? It doesn't see risk rising during a market crash. The **Blue/Purple Dashed Lines** (current bank formulas) curve a bit, but eventually flatten out because they can't understand true market panic.
 
-        The **Solid Green Path** (Deep BSDE) natively prices in "fat tails" because it remembers the historical rough volatility vectors from its training, accurately predicting fundamentally higher bounds during extreme market constraints.
+        The **Solid Green Path** is the AI. When the market goes extreme (like during a crash), the AI's curve goes up heavily! It remembers what real crashes look like from its training, allowing it to charge appropriately higher prices to protect you from extreme 'Black Swan' events.
         """)
 
 with tab2:
@@ -442,14 +441,14 @@ with tab2:
                 fig_hedge.update_layout(title="Continuous Portfolio P&L Drift", yaxis_title="Hedging Deviation ($)", height=400, template='plotly_dark')
                 st.plotly_chart(fig_hedge, use_container_width=True)
                 
-            st.info("The Empirical Black-Swan simulator natively pulls the physical S&P 500 crash indices from Q1 2020. By comparing the cumulative portfolio drift (Hedging P&L error), we scientifically validate the Deep BSDE's structural integrity compared to the total collapse of rigid Black-Scholes limits.")
+            st.info("Here we drop our AI into a simulation of the actual **Q1 2020 COVID-19 Stock Market Crash**.\n\nLook at the bottom chart. As the market plummeted, the old formulas (Red/Blue/Purple lines) completely failed to protect portfolios, losing massive amounts of money ('Hedging Deviation').\n\nThe **Solid Green Line** is our AI. It kept the portfolio almost perfectly safe at $0 loss because it dynamically understood the crash as it was happening.")
         else:
             st.error("Length mismatch between arrays on the UI boundary.")
     else:
         st.warning("Historical Arrays missing. Please trigger the backend orchestrator via `run.bat` to rebuild the empirical matrix bounds.")
 
 with tab3:
-    st.header("🌐 Neural Gamma (∂²C/∂S²) Hessian Extraction")
+    st.header("🌐 The 'Risk Acceleration' Map (AI Gamma)")
     
     with st.spinner("Executing dual PyTorch Autograd passes blindly extracting the Hessian physical matrix..."):
         # Synthesize 15x15 boundary grid natively
@@ -506,25 +505,25 @@ with tab3:
         with col_g_text:
             st.markdown("<br><br>", unsafe_allow_html=True)
             st.info('''
-            **What is the Hessian Matrix extracting?**
+            **What is this "Gamma" chart?**
             
-            By explicitly executing PyTorch's `autograd` engine **twice** consecutively (`create_graph=True` on the first iteration), the dashboard mathematically evaluates the actual 2nd-order curvature: $r"\\frac{\\partial^2 C}{\\partial S^2}$".
+            If Delta was "Risk Speed", Gamma is "Risk Acceleration". It tells us how violently the speed will change if the market continues to drop.
             
-            The **Purplish Surface** is the exact machine reading of Gamma variance.
-            The **Transparent Red Surface** maps the rigid probability density function of standard Banking options mapping.
+            The **Purplish Surface** is the AI calculating exact momentum changes.
+            The **Transparent Red Surface** is what banks use.
             
-            Notice how during Out-Of-The-Money intervals, the Neural Network actively flattens or extends the structural curvature safely tracking extreme crash constraints!
+            Notice how during Out-Of-The-Money intervals (market crashes), the AI physically flattens the curve to handle extreme constraints safely, while the old formulas just shoot into wildly incorrect risk approximations!
             ''')
 
     # ==========================================
     # 6. TAB 4: REINFORCEMENT LEARNING EXECUTION
     # ==========================================
     with tab4:
-        st.subheader("🤖 Autonomous Agent: Dynamic Slippage/Spread Hedging")
+        st.subheader("🤖 The Trading Robot: Auto-Protecting the Portfolio")
         st.markdown(
-            "While **Tab 1** maps continuous frictionless Partial Differential Equations (BSDEs), "
-            "**Tab 4** executes the live Institutional Reinforcement Learning Agent (PPO). "
-            "The AI observes the Neural Deltas combined with real-world Bid/Ask slippage and calculates exactly *how much* to hedge to minimize capital destruction."
+            "While the first tab just calculates the *math* of the options, "
+            "this tab is about **actually trading them**. "
+            "We gave an AI a simulated portfolio. It looks at the options, but it also considers real-world costs like **Trading Fees (Bid/Ask Spreads)**. It then learns when to trade and when to sit still so it doesn't waste all your money on transaction costs."
         )
         
         try:
@@ -545,7 +544,7 @@ with tab3:
                 st.warning("⚠️ **RL Brain Training in Progress!** We detected the Terminal process is actively compiling the Frictional Policy Network right now. Please wait 60 seconds and refresh this tab!")
             else:
                 rl_agent = load_rl_agent(ppo_path)
-                st.success("✅ Proximal Policy Optimization (PPO) Neural Network active. Physical slippage algorithms engaged.")
+                st.success("✅ The Trading Robot is active. It is now factoring in real-world trading fees.")
                 
                 # We iteratively playback the LIVE Trailing 20-Day options path chronologically to force Hedge Rebalancing.
                 bsde_deltas = []
@@ -586,23 +585,24 @@ with tab3:
                     path_tnsr_rl.requires_grad_(False)
                     bsde_deltas.append(phys_delta)
                     
-                    # RL Observation Space: [Time_Remaining, Current_Spot, Deep_BSDE_Delta, Current_Inventory]
-                    obs = np.array([term, current_spot, phys_delta, inventory], dtype=np.float32)
+                    # RL Observation Space: (Spot is normalized by starting tick of trajectory)
+                    normalized_spot = current_spot / rolling_S[0]
+                    obs = np.array([term, normalized_spot, phys_delta, inventory], dtype=np.float32)
                     
                     action, _ = rl_agent.predict(obs, deterministic=True)
-                    target_hedge = action[0]
+                    target_hedge = np.clip(action[0], 0.0, 1.0)
                     rl_actions.append(target_hedge)
                     inventory = target_hedge
                     
                 fig_ai = go.Figure()
                 time_indices = np.arange(-19, 1) # Display trailing context T-20 to Today
-                fig_ai.add_trace(go.Scatter(x=time_indices, y=bsde_deltas, mode='lines+markers', name='Deep BSDE Pure Delta', line=dict(color='#00ffcc', width=2)))
-                fig_ai.add_trace(go.Scatter(x=time_indices, y=rl_actions, mode='lines+markers', name='RL Agent Action (Slippage Aware)', line=dict(color='#ff007f', width=2)))
+                fig_ai.add_trace(go.Scatter(x=time_indices, y=bsde_deltas, mode='lines+markers', name='AI Target Risk Level (Zero Fees)', line=dict(color='#00ffcc', width=2)))
+                fig_ai.add_trace(go.Scatter(x=time_indices, y=rl_actions, mode='lines+markers', name='Trading Robot Reality (With Fees)', line=dict(color='#ff007f', width=2)))
                 
                 fig_ai.update_layout(
-                    title="Real-Time Trailing 20-Day Neural Execution: Autonomous Friction Hedging limits",
-                    xaxis_title="Trailing Days leading up to Today (T=0)",
-                    yaxis_title="Delta Hedging Inventory Exposure (0_to_1)",
+                    title="Real-Time 20-Day Trading Simulation: Watch the Robot save money by trading less",
+                    xaxis_title="Days Leading Up To Today (0)",
+                    yaxis_title="Amount of Stock Held in Portfolio (0% to 100%)",
                     template="plotly_dark",
                     height=500,
                     margin=dict(l=0, r=0, t=50, b=0),
@@ -610,3 +610,67 @@ with tab3:
                 )
                 
                 st.plotly_chart(fig_ai, use_container_width=True)
+                
+                # ==========================================
+                # SIMULATED PORTFOLIO VALUE CHART
+                # ==========================================
+                st.markdown("---")
+                st.subheader("💰 Simulated Portfolio Dollar Value")
+                st.caption("Starting with a **$100,000** portfolio and watching how each strategy performs over the 20 days.")
+                
+                PORTFOLIO_START = 100_000.0
+                portfolio_robot = [PORTFOLIO_START]
+                portfolio_unhedged = [PORTFOLIO_START]  # Just holds 100% stock all the time
+                transaction_cost_rate = 0.0002
+                
+                prev_robot_holding = 0.0
+                for i in range(1, 20):
+                    price_now = trail_S[i]
+                    price_prev = trail_S[i - 1]
+                    price_change_pct = (price_now - price_prev) / price_prev
+                    
+                    # Robot portfolio: hold what the robot decided yesterday
+                    robot_holding = rl_actions[i - 1]
+                    trade_cost = abs(robot_holding - prev_robot_holding) * transaction_cost_rate * portfolio_robot[-1]
+                    robot_pnl = robot_holding * price_change_pct * portfolio_robot[-1] - trade_cost
+                    portfolio_robot.append(portfolio_robot[-1] + robot_pnl)
+                    prev_robot_holding = robot_holding
+                    
+                    # Unhedged: always fully invested (100% stock)
+                    portfolio_unhedged.append(portfolio_unhedged[-1] * (1 + price_change_pct))
+                
+                fig_port = go.Figure()
+                fig_port.add_trace(go.Scatter(
+                    x=time_indices, y=portfolio_robot,
+                    mode='lines+markers', name='🤖 Robot Portfolio (Fee-Aware)',
+                    fill='tozeroy', fillcolor='rgba(0,255,204,0.07)',
+                    line=dict(color='#00ffcc', width=3)
+                ))
+                fig_port.add_trace(go.Scatter(
+                    x=time_indices, y=portfolio_unhedged,
+                    mode='lines', name='📉 Unhedged (100% Stock)',
+                    line=dict(color='#ff3333', width=2, dash='dash')
+                ))
+                fig_port.add_hline(y=PORTFOLIO_START, line_dash="dot", line_color="#888888",
+                                   annotation_text="Starting Value $100K", annotation_position="bottom right")
+                
+                fig_port.update_layout(
+                    title="Portfolio Dollar Value Over the Past 20 Trading Days",
+                    xaxis_title="Days Leading Up To Today (0)",
+                    yaxis_title="Portfolio Value ($)",
+                    yaxis_tickformat="$,.0f",
+                    template="plotly_dark",
+                    height=400,
+                    margin=dict(l=0, r=0, t=50, b=0),
+                    legend=dict(yanchor="bottom", y=-0.35, xanchor="center", x=0.5, orientation="h")
+                )
+                
+                st.plotly_chart(fig_port, use_container_width=True)
+                
+                # Summary metrics
+                robot_return = (portfolio_robot[-1] - PORTFOLIO_START) / PORTFOLIO_START * 100
+                unhedged_return = (portfolio_unhedged[-1] - PORTFOLIO_START) / PORTFOLIO_START * 100
+                col_m1, col_m2, col_m3 = st.columns(3)
+                col_m1.metric("Robot Final Value", f"${portfolio_robot[-1]:,.0f}", f"{robot_return:+.2f}%")
+                col_m2.metric("Unhedged Final Value", f"${portfolio_unhedged[-1]:,.0f}", f"{unhedged_return:+.2f}%")
+                col_m3.metric("Capital Saved vs Unhedged", f"${portfolio_robot[-1] - portfolio_unhedged[-1]:+,.0f}")
