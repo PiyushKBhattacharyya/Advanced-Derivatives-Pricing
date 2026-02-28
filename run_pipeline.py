@@ -34,9 +34,11 @@ if __name__ == "__main__":
         "data_loader.py",            # 1. Pull the latest Live Options Chains from the external broker/API
         "market_paths.py",           # 2. Extract strictly 15-30 years of True S&P 500 & VIX trajectories 
         "institutional_baselines.py",# 3. Generate SABR / rBergomi benchmarks for Tier-1 comparison
-        "train.py",                  # 4. Train the Friction-Aware Neural Architecture
-        "validation.py",             # 5. Numerically validate latency and COVID-19 Physical P&L
-        "generate_figures.py"        # 6. Native compilation of the mathematical 3D structures
+        "stress_test_gen.py",        # 4. Phase 7: Generate Synthetic Shadow Crashes via MarketVAE
+        "train.py",                  # 5. Train the Friction-Aware Neural Architecture
+        "explainability.py",         # 6. Phase 7: Execute Feature Attribution / Saliency maps
+        "validation.py",             # 7. Numerically validate latency, COVID-19 and Synthetic Crashes
+        "generate_figures.py"        # 8. Final Quant Armoury visualization compilation
     ]
     
     for script in execution_sequence:

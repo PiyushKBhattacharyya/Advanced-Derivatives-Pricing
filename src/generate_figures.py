@@ -515,6 +515,86 @@ def plot_institutional_comparison():
     
     print("Generated: Institutional comparison figures.")
 
+def plot_vae_stress_test_analysis():
+    """
+    Phase 7: Comprehensive Stress Test Analysis using synthetic MarketVAE paths.
+    Visualizes the probability distribution of hedging outcomes under "Shadow Crashes".
+    """
+    print("\n[QUANT ARMOURY PLOTS] Generating Synthetic Stress Test Report...")
+    
+    try:
+        deltas = np.load(os.path.join(BASE_DIR, "Data", "stress_test_deltas.npy"))
+        synthetic_crashes = np.load(os.path.join(BASE_DIR, "Data", "synthetic_crashes.npy"))
+    except:
+        print("Missing stress test data.")
+        return
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6), dpi=300)
+    
+    # 1. Hallucinated Trajectories
+    t = np.arange(20)
+    for i in range(min(50, len(synthetic_crashes))):
+        ax1.plot(t, np.cumsum(synthetic_crashes[i, :, 0]), color='#3498db', alpha=0.1)
+    ax1.set_title('MarketVAE: 1,000 Hallucinated "Shadow Crashes"', fontweight='bold')
+    ax1.set_xlabel('Trading Days', fontweight='bold')
+    ax1.set_ylabel('Synthetic Cumulative Log-Returns', fontweight='bold')
+    ax1.grid(True, linestyle=':', alpha=0.5)
+
+    # 2. Delta Distribution (Robustness)
+    ax2.hist(deltas, bins=40, color='#e74c3c', alpha=0.7, edgecolor='black', linewidth=0.5)
+    ax2.axvline(np.mean(deltas), color='black', linestyle='--', label=f'Mean Delta: {np.mean(deltas):.4f}')
+    ax2.set_title('Deep BSDE Delta Distribution under Extreme Stress', fontweight='bold')
+    ax2.set_xlabel('Predicted Hedging Delta', fontweight='bold')
+    ax2.set_ylabel('Frequency', fontweight='bold')
+    ax2.legend()
+    ax2.grid(True, linestyle=':', alpha=0.5)
+
+    plt.tight_layout()
+    plt.savefig(os.path.join(FIGS_DIR, "vae_stress_test_report.png"), bbox_inches='tight')
+    plt.close()
+
+def plot_feature_attribution_report():
+    """
+    Phase 7: Interpretability report showing which features drive model decisions.
+    Uses the output from explainability.py.
+    """
+    print("\n[QUANT ARMOURY PLOTS] Generating Feature Attribution Heatmaps...")
+    
+    try:
+        results = np.load(os.path.join(BASE_DIR, "Data", "model_attribution.npy"), allow_pickle=True)
+    except:
+        print("Missing attribution data.")
+        return
+
+    labels = list(results[0]['attribution'].keys())
+    # Extract scores for the samples
+    sample_scores = [list(res['attribution'].values()) for res in results]
+    
+    fig, ax = plt.subplots(figsize=(10, 6), dpi=300)
+    
+    x = np.arange(len(labels))
+    width = 0.35
+    
+    colors = ['#2ecc71', '#3498db']
+    for i, scores in enumerate(sample_scores):
+        ax.bar(x + (i*width) - width/2, scores, width, label=f'Option Sample {i+1}', color=colors[i], edgecolor='black', alpha=0.8)
+    
+    ax.set_ylabel('Relative Attribution Score (Importance)', fontweight='bold')
+    ax.set_title('Deep BSDE "Thinking Process": Feature Sensitivity Analysis', fontsize=14, fontweight='bold', pad=15)
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, fontweight='bold')
+    ax.set_ylim(0, 1.0)
+    ax.legend()
+    ax.grid(True, axis='y', linestyle='--', alpha=0.5)
+    
+    # Add descriptive annotations
+    ax.text(0.5, -0.15, "Interpretation: High 'Path Roughness' attribution indicates the LSTM is actively \nusing non-Markovian history to adjust its hedge.", 
+            ha='center', va='center', transform=ax.transAxes, fontsize=10, style='italic', bbox=dict(facecolor='white', alpha=0.5))
+
+    plt.tight_layout()
+    plt.savefig(os.path.join(FIGS_DIR, "model_explainability_report.png"), bbox_inches='tight')
+    plt.close()
+
 
 if __name__ == "__main__":
     import warnings
@@ -529,3 +609,5 @@ if __name__ == "__main__":
     plot_performance_benchmarks()
     plot_hedging_pnl()
     plot_institutional_comparison()
+    plot_vae_stress_test_analysis()
+    plot_feature_attribution_report()
