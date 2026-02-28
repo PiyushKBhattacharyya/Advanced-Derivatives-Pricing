@@ -10,3 +10,5 @@ tqdm
 yfinance
 ipykernel
 scikit-learn
+streamlit
+plotly
