@@ -14,6 +14,7 @@ sys.path.append(BASE_DIR)
 
 from src.models import DeepBSDE_RoughVol
 from src.train import prepare_empirical_batches
+from src.ibkr_client import InteractiveBrokersDeepBSDE
 from src.institutional_baselines import sabr_call_price, sabr_implied_vol, black_scholes_call, deterministic_local_vol_call, bs_delta, bs_gamma
 
 # ==========================================
@@ -38,15 +39,32 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 # ==========================================
 # 1. LIVE DATA INGESTION ENGINE
 # ==========================================
-@st.cache_data(ttl=300) # Cache limits API calls to Yahoo Finance strictly to 1 per 5 mins
+@st.cache_data(ttl=300) # Only cache historical matrices natively to prevent Yahoo Rate-Limits (5 min)
+def fetch_yahoo_history(ticker_symbol="^SPX"):
+    spx_hist = yf.Ticker(ticker_symbol).history(period="1mo")['Close']
+    vix_hist = yf.Ticker("^VIX").history(period="1mo")['Close']
+    intraday = yf.Ticker(ticker_symbol).history(period="1d", interval="5m")
+    return spx_hist, vix_hist, intraday
+
 def ping_live_market(ticker_symbol="^SPX"):
     try:
-        spx_hist = yf.Ticker(ticker_symbol).history(period="1mo")['Close']
-        vix_hist = yf.Ticker("^VIX").history(period="1mo")['Close']
+        spx_hist, vix_hist, intraday = fetch_yahoo_history(ticker_symbol)
         
-        # Pull high-fidelity fast data for a TradingView visual
-        intraday = yf.Ticker(ticker_symbol).history(period="1d", interval="5m")
-        
+        # 1. ATTEMPT TIER-1 INSTITUTIONAL API (TICK-BY-TICK SUB-SECOND)
+        ibkr = InteractiveBrokersDeepBSDE()
+        if ibkr.connect_to_exchange():
+            S_today, V_today = ibkr.fetch_live_spx_tick()
+            ibkr.disconnect()
+            
+            if S_today is not None and not np.isnan(S_today):
+                # Inject physically exact instant tick bounding into Neural Tensor
+                trail_S = spx_hist.tail(20).values
+                trail_S[-1] = S_today
+                trail_V = (vix_hist.tail(20).values / 100.0) ** 2
+                trail_V[-1] = V_today
+                return S_today, V_today, trail_S, trail_V, intraday
+
+        # 2. FALLBACK TO YAHOO FINANCE (IF PAPER TRADING DESKTOP CLOSED)
         S_today = spx_hist.iloc[-1]
         V_today = (vix_hist.iloc[-1] / 100.0) ** 2
         
