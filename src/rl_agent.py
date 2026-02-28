@@ -60,7 +60,7 @@ def train_frictional_ppo_agent():
         # The real PyTorch delta for ATM S&P options comes out around 0.10-0.15.
         # We model it as: base 0.10, + small adjustment for spot momentum.
         spot_movement = (spx_paths[i] - spx_paths[i, 0]) / spx_paths[i, 0]
-        bsde_deltas[i] = np.clip(0.10 + spot_movement * 0.5, 0.01, 0.30)
+        bsde_deltas[i] = np.clip(0.10 + spot_movement * 0.5, 0.05, 0.25)
 
     
     env = FrictionalHedgingEnv(spx_paths, bsde_deltas, transaction_cost=0.0002)

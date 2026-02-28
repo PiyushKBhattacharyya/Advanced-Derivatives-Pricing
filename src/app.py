@@ -640,25 +640,33 @@ with tab3:
                     portfolio_unhedged.append(portfolio_unhedged[-1] * (1 + price_change_pct))
                 
                 fig_port = go.Figure()
+                
+                # Shaded region showing exactly HOW MUCH the robot saved
                 fig_port.add_trace(go.Scatter(
                     x=time_indices, y=portfolio_robot,
                     mode='lines+markers', name='🤖 Robot Portfolio (Fee-Aware)',
-                    fill='tozeroy', fillcolor='rgba(0,255,204,0.07)',
+                    fill=None,
                     line=dict(color='#00ffcc', width=3)
                 ))
                 fig_port.add_trace(go.Scatter(
                     x=time_indices, y=portfolio_unhedged,
-                    mode='lines', name='📉 Unhedged (100% Stock)',
+                    mode='lines+markers', name='📉 Unhedged (100% Stock)',
+                    fill='tonexty', fillcolor='rgba(255,51,51,0.15)',
                     line=dict(color='#ff3333', width=2, dash='dash')
                 ))
-                fig_port.add_hline(y=PORTFOLIO_START, line_dash="dot", line_color="#888888",
-                                   annotation_text="Starting Value $100K", annotation_position="bottom right")
+                fig_port.add_hline(y=PORTFOLIO_START, line_dash="dot", line_color="#555",
+                                   annotation_text="$100K Starting Value", annotation_position="bottom right")
+                
+                # Zoomed Y-range: ±3% around starting value to make differences visible
+                all_vals = portfolio_robot + portfolio_unhedged
+                y_min = min(all_vals) * 0.9985
+                y_max = max(all_vals) * 1.0015
                 
                 fig_port.update_layout(
-                    title="Portfolio Dollar Value Over the Past 20 Trading Days",
+                    title="Portfolio Dollar Value: Robot vs Fully Unhedged (20-Day Real Market)",
                     xaxis_title="Days Leading Up To Today (0)",
                     yaxis_title="Portfolio Value ($)",
-                    yaxis_tickformat="$,.0f",
+                    yaxis=dict(tickformat="$,.0f", range=[y_min, y_max]),
                     template="plotly_dark",
                     height=400,
                     margin=dict(l=0, r=0, t=50, b=0),

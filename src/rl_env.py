@@ -64,7 +64,7 @@ class FrictionalHedgingEnv(gym.Env):
         
         # 4. Risk Mitigation Penalty (Do not stray too far from the exact Neural Limit)
         optimal_delta = self.bsde_deltas[self.current_path, self.current_step]
-        risk_penalty = 8.0 * np.abs(target_inventory - optimal_delta)
+        risk_penalty = 4.0 * np.abs(target_inventory - optimal_delta)
         
         total_reward = step_reward - risk_penalty
         
