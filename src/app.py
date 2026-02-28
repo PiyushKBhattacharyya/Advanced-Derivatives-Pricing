@@ -610,15 +610,12 @@ with tab3:
                 )
                 
                 st.plotly_chart(fig_ai, use_container_width=True)
-                st.info("""
-                **What are these two lines?**
-
-                🟢 **Green Line — "AI Target Risk Level":** This is what our Deep Learning model says the *perfect* amount of S&P 500 stock to hold is each day. It considers momentum from the past 20 days. Right now it recommends holding about **10–12%** of the portfolio in stock (very cautious — the market has been volatile lately).
-
-                🩷 **Pink Line — "Trading Robot Reality":** This is what the actual Trading Robot *decided* to hold after factoring in real-world **transaction fees**. Every time it buys or sells, it pays a small cost. So it deliberately holds its position slightly below the target to avoid wasting money on unnecessary trades.
-
-                > The gap between the lines = money saved on fees. A smaller gap means the robot matched the target closely. A flat line near zero means the robot stayed out of the market entirely to avoid costs.
-                """)
+                st.info(
+                    "**What are these two lines?**\n\n"
+                    "🟢 **Green Line — 'AI Target Risk Level':** This is what our Deep Learning model says the *perfect* amount of S&P 500 stock to hold each day. Right now it recommends holding about **10–12%** (very cautious — the market has been volatile lately).\n\n"
+                    "🩷 **Pink Line — 'Trading Robot Reality':** What the Trading Robot *actually* decided to hold after factoring in real-world **transaction fees**. It deliberately holds slightly less to avoid wasting money on unnecessary trades.\n\n"
+                    "*The gap between the lines = fees saved by trading less. A flat pink line near zero means the robot stayed out of the market entirely to avoid costs.*"
+                )
                 
                 # ==========================================
                 # SIMULATED PORTFOLIO VALUE CHART
@@ -683,17 +680,13 @@ with tab3:
                 )
                 
                 st.plotly_chart(fig_port, use_container_width=True)
-                st.info("""
-                **What does this chart show?**
-
-                Both strategies start with **$100,000**. The chart zooms tightly into the actual dollar values to make differences visible.
-
-                🟢 **Green Line (Robot Portfolio):** The robot only holds ~10% of its money in stocks. During normal market swings, it barely moves — which looks flat, but that's a **good thing**: it means the portfolio is protected.
-
-                🔴 **Red Dashed Line (100% Stock / Unhedged):** This investor put all $100,000 into the stock market. You can see the red line rising and crashing with every market move. Over the past 20 days it lost ~$867 compared to the cautious robot.
-
-                > The **shaded red zone** between the lines = the money the robot *saved* by not being fully exposed to the market.
-                """)
+                st.info(
+                    "**What does this chart show?**\n\n"
+                    "Both strategies start with **$100,000**. The chart is zoomed tightly into the actual dollar range so small differences are clearly visible.\n\n"
+                    "🟢 **Green Line (Robot Portfolio):** The robot holds only ~10% of its money in stocks. It barely moves — which looks flat, but that is a **good thing**: the portfolio is protected from market swings.\n\n"
+                    "🔴 **Red Dashed Line (Unhedged / 100% Stock):** This investor put all $100,000 into the stock market. The red line swings up and down with every market move.\n\n"
+                    "*The shaded red zone between the lines = the money the robot saved by not being fully exposed to the market.*"
+                )
                 
                 # Summary metrics
                 robot_return = (portfolio_robot[-1] - PORTFOLIO_START) / PORTFOLIO_START * 100
@@ -737,15 +730,16 @@ with tab3:
                 crash_days_x = np.arange(n_crash)
                 
                 INIT = 100_000.0
-                # Each strategy: [name, color, dash, initial_holding or None for dynamic]
+                # Each strategy: [name, color, dash, fixed_holding or None for dynamic]
                 strategy_specs = [
-                    ("🤖 AI Robot (Our System)",       "#00ffcc", "solid",   np.clip(np.mean(rl_actions), 0.0, 1.0)),
-                    ("📐 Black-Scholes Delta Hedge",   "#ff3333", "dash",    None),   # dynamic via bs_delta
-                    ("📊 SABR Delta Hedge",            "#2f81f7", "dash",    None),   # dynamic via sabr
+                    ("🤖 AI Robot (Our System)",       "#00ffcc", "solid",   "robot"),  # dynamic via rl_agent
+                    ("📐 Black-Scholes Delta Hedge",   "#ff3333", "dash",    None),    # dynamic via bs_delta
+                    ("📊 SABR Delta Hedge",            "#2f81f7", "dash",    None),    # dynamic via sabr
                     ("⚖️ Static 50% Hedge",            "#ff00ff", "dashdot", 0.50),
                     ("📉 Fully Unhedged (100% Stock)", "#888888", "dot",     1.00),
                 ]
                 
+                crash_inventories = {name: 0.0 for name, *_ in strategy_specs}
                 crash_portfolios = {name: [INIT] for name, *_ in strategy_specs}
                 
                 for day_i, day_ret in enumerate(crash_returns):
@@ -755,7 +749,15 @@ with tab3:
                     for (name, color, dash, fixed_h) in strategy_specs:
                         prev_val = crash_portfolios[name][-1]
                         
-                        if fixed_h is not None:
+                        if fixed_h == "robot":
+                            # Dynamic: ask the robot what to hold given current crash state
+                            norm_spot = S_crash_now / S_live  # ratio from crash start
+                            robot_delta_target = np.clip(0.10 + (norm_spot - 1.0) * 0.5, 0.05, 0.25)
+                            crash_obs = np.array([T_crash_rem, norm_spot, robot_delta_target, crash_inventories[name]], dtype=np.float32)
+                            crash_action, _ = rl_agent.predict(crash_obs, deterministic=True)
+                            h = np.clip(crash_action[0], 0.0, 1.0)
+                            crash_inventories[name] = h
+                        elif fixed_h is not None:
                             h = fixed_h
                         elif "Black-Scholes" in name:
                             h = bs_delta(S_crash_now, S_live, T_crash_rem, r_val, np.sqrt(V_live) * bsm_vol_mult)
