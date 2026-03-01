@@ -133,11 +133,13 @@ def load_deep_bsde_infrastructure(is_american=False):
     model_class = AmericanDeepBSDE if is_american else DeepBSDE_RoughVol
     model = model_class().to(device)
     
-    suffix = "_american" if is_american else "_empirical"
-    path = os.path.join(BASE_DIR, "Data", f"DeepBSDE{suffix}.pth")
-    
-    if os.path.exists(path):
-         model.load_state_dict(torch.load(path, map_location=device))
+    # ALWAYS load empirical Base Weights for Pricing/Hedging (Transfer Learning)
+    # The SPX-trained encoder/pricer/hedger are universally valid under proportional scaling.
+    empirical_path = os.path.join(BASE_DIR, "Data", "DeepBSDE_empirical.pth")
+    if os.path.exists(empirical_path):
+         # strict=False allows AmericanDeepBSDE to inherit the core modules, while ignoring its untrained StoppingNetwork
+         model.load_state_dict(torch.load(empirical_path, map_location=device), strict=False)
+         
     model.eval()
     
     # LOAD SCALERS FROM DISK (Persistent)

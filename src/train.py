@@ -2,8 +2,9 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import numpy as np
+import torch.nn.functional as F
 
-from src.models import DeepBSDE_RoughVol
+from src.models import DeepBSDE_RoughVol, AmericanDeepBSDE
 import os
 import pandas as pd
 from src.baselines import get_empirical_dataset
@@ -192,6 +193,79 @@ def train_model(epochs=2000, lr=1e-3):
     # Save the PyTorch model artifact securely
     torch.save(model.state_dict(), "Data/DeepBSDE_empirical.pth")
     return model, loss_history, price_scaler, spot_scaler, strike_scaler
+def train_american_model(epochs=1000, lr=1e-3):
+    """
+    Trains the StoppingNetwork (Early Exercise Boundary) for American Options.
+    This leverages Transfer Learning by freezing the pre-trained European weights 
+    and solely optimizing the stopping probabilities against intrinsic value.
+    """
+    print("Initiating American Deep BSDE Training Sequence (Optimal Stopping)...")
+    
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model = AmericanDeepBSDE().to(device)
+    
+    # ALWAYS load empirical Base Weights for Pricing/Hedging
+    empirical_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "Data", "DeepBSDE_empirical.pth")
+    if os.path.exists(empirical_path):
+         model.load_state_dict(torch.load(empirical_path, map_location=device), strict=False)
+         print(f"Loaded Pre-Trained Empirical Encoder/Pricer Core from {empirical_path}")
+    else:
+         print("WARNING: Pre-trained empirical model not found. Training from scratch.")
+         
+    # Freeze the Core modules to prevent catastrophic forgetting
+    for param in model.encoder.parameters(): param.requires_grad = False
+    for param in model.pricer.parameters(): param.requires_grad = False
+    for param in model.hedger.parameters(): param.requires_grad = False
+    
+    # We only optimize the stopper network
+    optimizer = optim.AdamW(model.stopper.parameters(), lr=lr)
+    
+    # Load and move empirical data
+    X_paths, X_contract, _, price_scaler, spot_scaler, strike_scaler = prepare_empirical_batches()
+    X_paths, X_contract = X_paths.to(device), X_contract.to(device)
+    
+    # For American Calls, the Intrinsic Value is max(S-K, 0)
+    # We create a target stopping probability: 1 if S > K (deep in money), else 0
+    # True Longstaff-Schwartz compares this to continuation value, but for the surrogate target,
+    # we enforce a smooth Sigmoid-based cross entropy around the Strike.
+    
+    # De-scale Spots and Strikes to compare them in the physical domain
+    spots_scaled = X_paths[:, -1, 0].cpu().numpy().reshape(-1, 1)
+    strikes_scaled = X_contract[:, 1].cpu().numpy().reshape(-1, 1)
+    
+    spots_physical = spot_scaler.inverse_transform(spots_scaled)
+    strikes_physical = strike_scaler.inverse_transform(strikes_scaled)
+    
+    # Target Prob = 1 if Spot > Strike * 1.05 (In the money enough to justify exercise)
+    target_probs = (spots_physical > (strikes_physical * 1.02)).astype(np.float32)
+    target_probs_tensor = torch.tensor(target_probs).to(device)
+    
+    loss_history = []
+    
+    model.train()
+    for epoch in range(epochs):
+        optimizer.zero_grad()
+        
+        # Forward Pass (we only care about stopping_prob here)
+        _, _, stopping_prob = model(X_paths, X_contract)
+        
+        # Binary Cross Entropy Loss against our theoretical stopping rule
+        loss = F.binary_cross_entropy(stopping_prob, target_probs_tensor)
+        
+        loss.backward()
+        optimizer.step()
+        
+        loss_history.append(loss.item())
+        
+        if (epoch + 1) % 50 == 0:
+            print(f"Epoch [{epoch+1}/{epochs}] | Boundary Classification Error (BCE): {loss.item():.4f}")
+            
+    print("American Optimization Complete.")
+    
+    # Save the PyTorch model artifact securely
+    torch.save(model.state_dict(), "Data/DeepBSDE_american.pth")
+    return model, loss_history
 
 if __name__ == "__main__":
     train_model(epochs=2000)
+    train_american_model(epochs=1000)
