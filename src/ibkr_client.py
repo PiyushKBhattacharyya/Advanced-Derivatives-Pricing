@@ -20,7 +20,7 @@ try:
         
     nest_asyncio.apply()
         
-    from ib_insync import IB, Index, Option, LimitOrder, util
+    from ib_insync import IB, Index, Stock, Option, LimitOrder, util
     HAS_IB = True
 except ImportError:
     HAS_IB = False
@@ -73,35 +73,61 @@ class InteractiveBrokersDeepBSDE:
             logging.warning(f"IBKR Connection Refused. Ensure TWS/Gateway is actively running. Fallback to yfinance active. | Error: {e}")
             return False
             
-    def fetch_live_spx_tick(self) -> Tuple[float, float]:
+    def fetch_live_asset_tick(self, symbol: str = 'AAPL', sec_type: str = 'STK') -> Tuple[float, float]:
         """
-        Returns exactly continuous `[Spot, VIX]` instantaneous tensor metrics.
-        The `S&P 500` index strictly utilizes the symbol 'SPX' mathematically evaluated at 'CBOE'.
+        Returns exactly continuous `[Spot, VIX]` instantaneous tensor metrics for a given asset.
+        Supports 'STK' (Stock) and 'IND' (Index).
         """
         if not self.connected:
             return None, None
             
-        spx_contract = Index('SPX', 'CBERI')
+        if sec_type == 'STK':
+            asset_contract = Stock(symbol, 'SMART', 'USD')
+        else:
+            asset_contract = Index(symbol, 'CBOE') # Default to CBOE for Indexes
+            
         vix_contract = Index('VIX', 'CBOE')
         
-        self.ib.qualifyContracts(spx_contract, vix_contract)
+        self.ib.qualifyContracts(asset_contract, vix_contract)
         
-        # Pull realtime snapshot constraints bypassing the 5-minute Yahoo throttle
-        spx_ticker = self.ib.reqMktData(spx_contract, '', False, False)
+        # Pull realtime snapshot constraints
+        asset_ticker = self.ib.reqMktData(asset_contract, '', False, False)
         vix_ticker = self.ib.reqMktData(vix_contract, '', False, False)
         
-        self.ib.sleep(1) # Allow TCP streaming bounds half a second to buffer tick
+        self.ib.sleep(1) # Buffer tick
         
-        S_live = spx_ticker.marketPrice()
+        S_live = asset_ticker.marketPrice()
         vix_live = vix_ticker.marketPrice()
         
-        # If market closed, pull the latest physical close limits
+        # Fallback to close
         if np.isnan(S_live) or S_live <= 0:
-            S_live = spx_ticker.close
+            S_live = asset_ticker.close
         if np.isnan(vix_live) or vix_live <= 0:
             vix_live = vix_ticker.close
             
         return S_live, vix_live
+
+    def fetch_dividend_yield(self, symbol: str) -> float:
+        """
+        Fetches the fundamental dividend yield for a stock ticker.
+        """
+        if not self.connected:
+            return 0.0
+            
+        contract = Stock(symbol, 'SMART', 'USD')
+        self.ib.qualifyContracts(contract)
+        
+        # Request fundamental data or tick types for dividend info
+        # For simplicity in this research phase, we pull the 12-month trailing yield
+        ticker = self.ib.reqMktData(contract, '258', False, False) # 258 is fundamental ratios
+        self.ib.sleep(1)
+        
+        # IBKR often provides this in fundamental ratios
+        # If unavailable, default to a conservative estimate or 0
+        try:
+            return float(ticker.fundamentalRatios.get('DY', 0.0)) / 100.0
+        except:
+            return 0.0
         
     def construct_deep_bsde_limit_order(self, right: str, K: float, T: float, predicted_price: float, trade_qty: int = 1) -> Any:
         """

@@ -9,11 +9,14 @@ import pandas as pd
 from src.baselines import get_empirical_dataset
 from datetime import datetime
 from sklearn.preprocessing import StandardScaler
+import pickle
 
 # Global scalers to inverse-transform predictions later
 price_scaler = StandardScaler()
 spot_scaler = StandardScaler()
 strike_scaler = StandardScaler()
+
+SCALER_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "Data", "scalers.pkl")
 
 # Phase 6: Deep Hedging Frictions
 # 0.0002 = 2 basis points per ticket (typical Tier-1 Execution Cost)
@@ -65,9 +68,14 @@ def prepare_empirical_batches(seq_len=20, batch_size=32):
     trailing_vix = (historical_vix_slice.iloc[-seq_len:].values.flatten() / 100.0) ** 2
     
     # NORMALIZATION PHASE: Scale massive financial SPX values to Mean=0, Var=1 for PyTorch stability
+    # If file exists, we can optionally load instead of fit, but for training we fit.
     trailing_spx_scaled = spot_scaler.fit_transform(trailing_spx.reshape(-1, 1)).flatten()
     strikes_scaled = strike_scaler.fit_transform(strikes.reshape(-1, 1)).flatten()
     market_prices_scaled = price_scaler.fit_transform(market_prices.reshape(-1, 1)).flatten()
+    
+    # Save the fitted scalers for the dashboard
+    with open(SCALER_PATH, 'wb') as f:
+        pickle.dump({'price': price_scaler, 'spot': spot_scaler, 'strike': strike_scaler}, f)
     
     num_samples = len(spots)
     
@@ -106,7 +114,7 @@ def bsde_empirical_loss(predicted_prices, market_prices, predicted_greeks):
     
     return mse_loss + variance_penalty + friction_penalty
 
-def train_model(epochs=500, lr=1e-3):
+def train_model(epochs=2000, lr=1e-3):
     """
     Executes the training sequence on the actual SPX options chain data.
     """
@@ -120,7 +128,24 @@ def train_model(epochs=500, lr=1e-3):
     X_paths, X_contract, Y_target, price_scaler, spot_scaler, strike_scaler = prepare_empirical_batches()
     X_paths, X_contract, Y_target = X_paths.to(device), X_contract.to(device), Y_target.to(device)
     
+    # 80/20 Train/Validation Split for Early Stopping
+    dataset_size = len(X_paths)
+    val_size = int(0.2 * dataset_size)
+    train_size = dataset_size - val_size
+    
+    indices = torch.randperm(dataset_size)
+    train_indices, val_indices = indices[:train_size], indices[train_size:]
+    
+    X_train_paths, X_train_contract, Y_train = X_paths[train_indices], X_contract[train_indices], Y_target[train_indices]
+    X_val_paths, X_val_contract, Y_val = X_paths[val_indices], X_contract[val_indices], Y_target[val_indices]
+    
     loss_history = []
+    
+    # Early Stopping Config
+    patience = 50
+    best_loss = float('inf')
+    patience_counter = 0
+    best_model_state = None
     
     # Standard PyTorch Training Loop
     model.train()
@@ -128,10 +153,10 @@ def train_model(epochs=500, lr=1e-3):
         optimizer.zero_grad()
         
         # Forward Pass
-        pred_prices, pred_greeks = model(X_paths, X_contract)
+        pred_prices, pred_greeks = model(X_train_paths, X_train_contract)
         
         # Calculate Loss explicitly against reality
-        loss = bsde_empirical_loss(pred_prices, Y_target, pred_greeks)
+        loss = bsde_empirical_loss(pred_prices, Y_train, pred_greeks)
         
         # Backpropagation
         loss.backward()
@@ -139,8 +164,28 @@ def train_model(epochs=500, lr=1e-3):
         
         loss_history.append(loss.item())
         
+        # Validation Pass for Early Stopping
+        model.eval()
+        with torch.no_grad():
+            val_pred_prices, val_pred_greeks = model(X_val_paths, X_val_contract)
+            val_loss = bsde_empirical_loss(val_pred_prices, Y_val, val_pred_greeks).item()
+        model.train()
+        
+        if val_loss < best_loss:
+            best_loss = val_loss
+            patience_counter = 0
+            # Clone state_dict to avoid reference mutation
+            best_model_state = {k: v.cpu().clone() for k, v in model.state_dict().items()} 
+        else:
+            patience_counter += 1
+            
         if (epoch + 1) % 20 == 0:
-            print(f"Epoch [{epoch+1}/{epochs}] | BSDE Empirical Error (MSE + Hedging Penalty): {loss.item():.4f}")
+            print(f"Epoch [{epoch+1}/{epochs}] | Train Loss: {loss.item():.4f} | Val Loss: {val_loss:.4f} | Patience: {patience_counter}/{patience}")
+            
+        if patience_counter >= patience:
+            print(f"Early Stopping Triggered at Epoch {epoch+1}. Restoring best weights (Val Loss: {best_loss:.4f})")
+            model.load_state_dict(best_model_state)
+            break
             
     print("Optimization Complete.")
     
@@ -149,4 +194,4 @@ def train_model(epochs=500, lr=1e-3):
     return model, loss_history, price_scaler, spot_scaler, strike_scaler
 
 if __name__ == "__main__":
-    train_model(epochs=500)
+    train_model(epochs=2000)

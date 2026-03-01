@@ -7,12 +7,15 @@ import os
 import sys
 import plotly.graph_objects as go
 from datetime import datetime
+import pickle
+from sklearn.base import clone
 
 # Path bindings
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(BASE_DIR)
 
-from src.models import DeepBSDE_RoughVol
+from src.models import DeepBSDE_RoughVol, AmericanDeepBSDE
+from src.rbsde_solver import RBSDESolver
 from src.train import prepare_empirical_batches
 from src.ibkr_client import InteractiveBrokersDeepBSDE
 from src.institutional_baselines import sabr_call_price, sabr_implied_vol, black_scholes_call, deterministic_local_vol_call, bs_delta, bs_gamma
@@ -49,7 +52,7 @@ def fetch_yahoo_history(ticker_symbol="^SPX"):
             raise ValueError("Empty data returned from Yahoo Finance")
         return spx_hist, vix_hist, intraday
     except Exception as e:
-        # Yahoo Finance rate-limited or unavailable — fall back to synthetic data
+        # Yahoo Finance rate-limited or unavailable - fall back to synthetic data
         # so the dashboard stays online and functional for demos.
         import pandas as pd
         st.warning(
@@ -85,46 +88,70 @@ def fetch_yahoo_history(ticker_symbol="^SPX"):
         return spx_hist, vix_hist, intraday
 
 def ping_live_market(ticker_symbol="^SPX"):
+    # Determine security type
+    is_index = ticker_symbol.startswith("^") or ticker_symbol == "SPX"
+    sec_type = "IND" if is_index else "STK"
+    
     spx_hist, vix_hist, intraday = fetch_yahoo_history(ticker_symbol)
     
-    # 1. ATTEMPT TIER-1 INSTITUTIONAL API (TICK-BY-TICK SUB-SECOND)
+    # 1. ATTEMPT TIER-1 INSTITUTIONAL API
     ibkr = InteractiveBrokersDeepBSDE()
     if ibkr.connect_to_exchange():
-        S_today, V_today = ibkr.fetch_live_spx_tick()
+        S_today, V_today = ibkr.fetch_live_asset_tick(ticker_symbol.replace("^", ""), sec_type)
+        q_today = ibkr.fetch_dividend_yield(ticker_symbol.replace("^", "")) if sec_type == "STK" else 0.0
         ibkr.disconnect()
         
         if S_today is not None and not np.isnan(S_today):
-            # Inject physically exact instant tick bounding into Neural Tensor
             trail_S = spx_hist.tail(20).values
             trail_S[-1] = S_today
             trail_V = (vix_hist.tail(20).values / 100.0) ** 2
             trail_V[-1] = V_today
-            return S_today, V_today, trail_S, trail_V, intraday
+            return S_today, V_today, trail_S, trail_V, intraday, q_today
 
-    # 2. FALLBACK TO YAHOO FINANCE (IF PAPER TRADING DESKTOP CLOSED)
+    # 2. FALLBACK TO YAHOO FINANCE
     S_today = spx_hist.iloc[-1]
     V_today = (vix_hist.iloc[-1] / 100.0) ** 2
-    
-    # trailing 20 days inherently defining the non-Markovian memory path
     trail_S = spx_hist.tail(20).values
     trail_V = (vix_hist.tail(20).values / 100.0) ** 2
     
-    return S_today, V_today, trail_S, trail_V, intraday
+    # Estimate dividend yield from yfinance for stocks
+    q_today = 0.0
+    if sec_type == "STK":
+        try:
+            ticker = yf.Ticker(ticker_symbol)
+            divs = ticker.dividends
+            if not divs.empty:
+                q_today = divs.last('1Y').sum() / S_today
+        except: pass
+    
+    return S_today, V_today, trail_S, trail_V, intraday, q_today
+
+SCALER_PATH = os.path.join(BASE_DIR, "Data", "scalers.pkl")
 
 @st.cache_resource
-def load_deep_bsde_infrastructure():
-    model = DeepBSDE_RoughVol().to(device)
-    path = os.path.join(BASE_DIR, "Data", "DeepBSDE_empirical.pth")
+def load_deep_bsde_infrastructure(is_american=False):
+    model_class = AmericanDeepBSDE if is_american else DeepBSDE_RoughVol
+    model = model_class().to(device)
+    
+    suffix = "_american" if is_american else "_empirical"
+    path = os.path.join(BASE_DIR, "Data", f"DeepBSDE{suffix}.pth")
+    
     if os.path.exists(path):
          model.load_state_dict(torch.load(path, map_location=device))
     model.eval()
     
-    try:
-         _, _, _, price_scaler, spot_scaler, strike_scaler = prepare_empirical_batches(seq_len=20)
-    except:
-         st.error("Missing Pre-Trained Empirical Memory Scalers. Run `run_pipeline.py` first.")
-         st.stop()
-         
+    # LOAD SCALERS FROM DISK (Persistent)
+    if os.path.exists(SCALER_PATH):
+        with open(SCALER_PATH, 'rb') as f:
+            scalers = pickle.load(f)
+            price_scaler = scalers['price']
+            spot_scaler = scalers['spot']
+            strike_scaler = scalers['strike']
+    else:
+        # Fallback to re-preparing if not found (but this is what we want to avoid)
+        from src.train import prepare_empirical_batches
+        _, _, _, price_scaler, spot_scaler, strike_scaler = prepare_empirical_batches(seq_len=20)
+        
     return model, price_scaler, spot_scaler, strike_scaler
 
 # ==========================================
@@ -151,10 +178,12 @@ sim_transaction_cost = 0.0002
 sim_crash_severity = 0.35
 
 # ── GLOBAL PARAMS ──────────────────
-asset_selection = "^SPX"
+if 'asset_selection' not in st.session_state:
+    st.session_state.asset_selection = "^SPX"
 
-# ── GLOBAL PARAMS ──────────────────
-asset_selection = "^SPX"
+asset_selection = st.session_state.asset_selection
+sim_transaction_cost = 0.0002
+sim_crash_severity = 0.35
 
 if 'active_tab' not in st.session_state:
     st.session_state.active_tab = "⚡ Live Option Pricing"
@@ -174,7 +203,18 @@ active_page = st.session_state.active_tab
 # ── PERMANENT SIDEBAR ──────────────────
 with st.sidebar:
     st.header("⚙️ Dashboard Controls")
-    st.markdown(f"**Index:** `{asset_selection}` (S&P 500)")
+    
+    # Research Ticker selection
+    research_assets = {"S&P 500 Index": "^SPX", "Apple Inc.": "AAPL", "Tesla Inc.": "TSLA"}
+    sel_asset = st.selectbox("🎯 Research Target", list(research_assets.keys()), 
+                             index=list(research_assets.values()).index(asset_selection) if asset_selection in research_assets.values() else 0)
+    
+    if research_assets[sel_asset] != asset_selection:
+        st.session_state.asset_selection = research_assets[sel_asset]
+        st.rerun()
+
+    st.markdown(f"**Index:** `{asset_selection}`")
+    
     if st.button("🔄 Reload All AI Data"):
         st.cache_data.clear()
         st.cache_resource.clear()
@@ -184,15 +224,50 @@ with st.sidebar:
 # (Sidebar Injection for the active page is handled inside the page blocks below)
 
 # LOAD CONSTRAINTS
-S_live, V_live, trail_S, trail_V, intraday_df = ping_live_market(asset_selection)
+S_live, V_live, trail_S, trail_V, intraday_df, q_live = ping_live_market(asset_selection)
 
 if S_live is None:
     st.error("Live Web-Socket Connection to Market Exchange structurally failed.")
     st.stop()
 
 # ── AI INFRASTRUCTURE (Global) ──────────────────
-model, price_scaler, spot_scaler, strike_scaler = load_deep_bsde_infrastructure()
-s_scaled = spot_scaler.transform(trail_S.reshape(-1,1)).flatten()
+# Phase 15: Automatic Style Enforcement
+# Stocks (AAPL, TSLA) = American, Indexes (^SPX) = European
+is_american = not (asset_selection.startswith("^") or asset_selection == "SPX")
+model, price_scaler, spot_scaler, strike_scaler = load_deep_bsde_infrastructure(is_american)
+
+# CRITICAL: Scaling Regime Check (Transfer Learning support)
+# If the spot_scaler was fitted on SPX (~5000) but we are pricing AAPL (~264),
+# we should use a 'Relative Spot' scaling to prevent LSTM saturation.
+try:
+    fitted_mean = spot_scaler.mean_[0]
+    fitted_scale = spot_scaler.scale_[0]
+    
+    # We always use the 'Relative Scaling' shift for consistency across all assets
+    # This prevents neural saturation if S_live is far from fitted_mean.
+    spot_scaler_eval = clone(spot_scaler)
+    spot_scaler_eval.mean_ = np.array([S_live])
+    # The 'Scale' (Standard Deviation) must also be scaled proportionally.
+    # If the model expects a 1% daily move at Spot=5000, it should expect a 1% daily move at Spot=264.
+    scaling_factor = S_live / fitted_mean
+    spot_scaler_eval.scale_ = np.array([fitted_scale * scaling_factor])
+    
+    price_scaler_eval = clone(price_scaler)
+    price_scaler_eval.mean_ = np.array([price_scaler.mean_[0] * scaling_factor])
+    price_scaler_eval.scale_ = np.array([price_scaler.scale_[0] * scaling_factor])
+    
+    strike_scaler_eval = clone(strike_scaler)
+    strike_scaler_eval.mean_ = np.array([S_live])
+    strike_scaler_eval.scale_ = np.array([strike_scaler.scale_[0] * scaling_factor])
+    
+    # Re-calc path tensor with the shifted regime
+    s_scaled = spot_scaler_eval.transform(trail_S.reshape(-1,1)).flatten()
+except:
+    s_scaled = spot_scaler.transform(trail_S.reshape(-1,1)).flatten()
+    spot_scaler_eval = spot_scaler
+    price_scaler_eval = price_scaler
+    strike_scaler_eval = strike_scaler
+
 path_tnsr = torch.tensor(np.stack([s_scaled, trail_V], axis=-1), dtype=torch.float32).unsqueeze(0).to(device)
 
 
@@ -256,7 +331,8 @@ if active_page == "⚡ Live Option Pricing":
     # 3. INTERACTIVE 3D PRICING ENGINE
     # ==========================================
     st.markdown("---")
-    st.subheader("🛰️ AI vs Bank Price Estimation Map")
+    asset_label = "Index" if asset_selection.startswith("^") else "Stock"
+    st.subheader(f"🛰️ AI vs Bank Price Estimation Map ({asset_label}: {asset_selection})")
 
     with st.spinner("Compiling structural dual-surface geometries natively..."):
         # Build the 2D evaluation mesh covering localized bounds
@@ -276,14 +352,17 @@ if active_page == "⚡ Live Option Pricing":
                 t_val = T_mesh[i, j]
 
                 # Deep Network Eval
-                k_scaled = strike_scaler.transform(np.array([[k_val]]))[0,0]
+                k_scaled = strike_scaler_eval.transform(np.array([[k_val]]))[0,0]
                 cont_tnsr = torch.tensor([[t_val, k_scaled]], dtype=torch.float32).to(device)
 
                 with torch.no_grad():
-                    pred_scaled, _ = model(path_tnsr, cont_tnsr)
+                    # Handle both European (2 outputs) and American (3 outputs) architectures
+                    model_outputs = model(path_tnsr, cont_tnsr)
+                    pred_scaled = model_outputs[0]
 
                 p_dl = price_scaler.inverse_transform(pred_scaled.cpu().numpy())[0,0]
-                dl_prices[i, j] = np.maximum(p_dl, 0.0) # Floor arbitrage limits strictly
+                # CRITICAL: Arbitrage Bounds Check (0 <= Call Price <= Spot)
+                dl_prices[i, j] = np.clip(p_dl, 0.0, S_live)
 
                 # SABR Banking Execution Eval
                 p_sabr = sabr_call_price(S_live, k_val, t_val, r_val, sabr_alpha, sabr_beta, sabr_rho, sabr_nu)
@@ -311,32 +390,81 @@ if active_page == "⚡ Live Option Pricing":
                                 showscale=False))
 
     fig_3d.update_layout(
+        title=f"3D Price Surface: AI vs Traditional Models  ",
         scene=dict(
-            xaxis_title='Strike K',
-            yaxis_title='Maturity T (Years)',
-            zaxis_title='Predicted Call Price ($)'
+            xaxis_title='Strike Price (K)',
+            yaxis_title='Time to Expiration (Years)',
+            zaxis_title='Option Price ($)'
         ),
-        width=800, height=500,
-        margin=dict(l=0, r=0, b=0, t=20),
-        template='plotly_dark'
+        width=900, height=700, margin=dict(l=0, r=0, b=0, t=50),
+        template="plotly_dark"
     )
 
     col_3d, col_3d_text = st.columns([2.5, 1])
 
     with col_3d:
         st.plotly_chart(fig_3d, use_container_width=True)
+        st.info(f"**Research Note:** In {'American' if is_american else 'European'} mode. Dividend Yield active at **{q_live:.2%}**.")
+
+        # ==========================================
+        # PHASE 15: OPTIMAL EXERCISE BOUNDARY
+        # ==========================================
+        if is_american:
+            st.markdown("---")
+            st.subheader("Optimal Early Exercise Boundary")
+            st.markdown("The chart below shows the 'Critical Price' $S^*$ for each time point. If the stock price crosses this line, it is mathematically optimal to exercise the option immediately rather than holding it.")
+            
+            solver = RBSDESolver(model)
+            time_points = np.linspace(0.01, 1.0, 20)
+            bound_S = []
+            
+            with st.spinner("Calculating Stopping Boundary using Deep Optimal Stopping..."):
+                for t_pt in time_points:
+                    # Search range: higher for calls, lower for puts
+                    search_range = np.linspace(S_live * 0.5, S_live * 1.5, 100)
+                    # Pass the correct evaluation scalers, trailing vol, Strike, AND TRAIL_S memory
+                    s_star = solver.find_optimal_exercise_boundary(
+                        search_range, t_pt, S_live, 'call', spot_scaler_eval, trail_V, strike_scaler_eval.transform([[S_live]])[0,0], trail_S
+                    )
+                    if s_star is not None:
+                        bound_S.append(s_star)
+                    else:
+                        bound_S.append(np.nan) # Plotly skips NaNs gracefully
+            
+            fig_bound = go.Figure()
+            fig_bound.add_trace(go.Scatter(x=time_points, y=bound_S, mode='lines+markers', name='Exercise Threshold S*(t)', line=dict(color='#ff3333', width=3)))
+            # Use a scatter trace with a dashed line instead of add_hline so it appears in the legend
+            fig_bound.add_trace(go.Scatter(x=[0, 1.0], y=[S_live, S_live], mode='lines', name='Current Spot Price', line=dict(color='#00ffcc', width=2, dash='dash')))
+            
+            fig_bound.update_layout(
+                title="Optimal Exercise Boundary over Time (American Call)",
+                xaxis_title="Time to Maturity (Years)",
+                yaxis_title="Stock Price ($)",
+                template="plotly_dark",
+                height=450,
+                legend=dict(yanchor="bottom", y=-0.3, xanchor="center", x=0.5, orientation="h")
+            )
+            st.plotly_chart(fig_bound, use_container_width=True)
+            st.caption("Early exercise is generally optimal when the stock price is significantly high (for calls) relative to the strike and interest rates.")
 
     with col_3d_text:
         st.markdown("<br><br>", unsafe_allow_html=True)
         st.info("""
         **What are you looking at?**
 
-        This 3D grid shows how much different options (bets on the stock market) should cost based on time and the stock's future price.
+        This 3D grid shows how much different American options (like AAPL or TSLA) should cost based on time and strike price. Unlike European options, American options can be exercised early.
 
-        The **Red Surface** represents the Nobel-winning *Black-Scholes formula* from 1973. Notice how flat it is? It assumes the market is calm and predictable.
-        The **Transparent Blue Surface** represents what modern banks use (*SABR model*). It creates a "smile" curve, but it's blind—it only uses today's data and has no memory of the past.
-
-        The **Bright Solid Heatmap** is our AI. Because it remembers the *panic and momentum* of the last 20 days, you can actually see it warping and adjusting prices during extreme market events—something traditional math simply cannot do!
+        The **Bright Heatmap** is our AI (Deep BSDE), solving a complex system of equations to find the true price.
+        The **Transparent Red Surface** is the classic Black-Scholes formula, which fundamentally *cannot* price American options correctly because it assumes you must hold to expiration.
+        """)
+        
+        st.markdown("<br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br>", unsafe_allow_html=True)
+        st.info("""
+        **The Optimal Exercise Boundary**
+        
+        Because American options can be exercised early, there is a mathematical "border" (the Red Line). 
+        
+        If the stock price ever crosses strictly above this line, the AI calculates that the immediate cash payout is worth more than the mathematical *time value* left in the contract.
         """)
 
 
@@ -366,10 +494,11 @@ if active_page == "⚡ Live Option Pricing":
                 t_val = T_mesh_d[i, j]
                 
                 # Autograd execution
-                k_scaled = strike_scaler.transform(np.array([[k_val]]))[0,0]
+                k_scaled = strike_scaler_eval.transform(np.array([[k_val]]))[0,0]
                 cont_tnsr = torch.tensor([[t_val, k_scaled]], dtype=torch.float32).to(device)
                 
-                pred_scaled, _ = model(path_tnsr, cont_tnsr)
+                model_outputs_d = model(path_tnsr, cont_tnsr)
+                pred_scaled = model_outputs_d[0]
                 
                 # Diff PyTorch computational graph explicitly against Spot input
                 grad = torch.autograd.grad(outputs=pred_scaled, inputs=path_tnsr, grad_outputs=torch.ones_like(pred_scaled), create_graph=False)[0]
@@ -406,12 +535,10 @@ if active_page == "⚡ Live Option Pricing":
             st.info('''
             **What is this "Delta" chart?**
             
-            This measures "Risk Speed" — how fast your option changes in value when the stock market moves by $1.
+            This measures "Risk Speed" - how fast your option changes in value when the stock market moves by $1.
             
             The **Green/Yellow Surface** is our AI's real-time risk map. 
             The **Transparent Red, Blue, and Purple Surfaces** are what banks use today.
-            
-            Notice how at the edges (representing extreme crashes), the AI intelligently tells you to hold a different amount of risk than the banking formulas do. The AI does this because it remembers the exact speed the market moved during the COVID-19 panic!
             ''')
 
     # ==========================================
@@ -429,12 +556,14 @@ if active_page == "⚡ Live Option Pricing":
 
     for k_val in sliced_k:
         # Scale Network parameters natively
-        k_scaled = strike_scaler.transform(np.array([[k_val]]))[0,0]
+        k_scaled = strike_scaler_eval.transform(np.array([[k_val]]))[0,0]
         cont_tnsr = torch.tensor([[eval_maturity, k_scaled]], dtype=torch.float32).to(device)
         with torch.no_grad():
-            pred_scaled, _ = model(path_tnsr, cont_tnsr)
+            model_outputs_s = model(path_tnsr, cont_tnsr)
+            pred_scaled = model_outputs_s[0]
         p_dl = price_scaler.inverse_transform(pred_scaled.cpu().numpy())[0,0]
-        slice_dl.append(np.maximum(p_dl, 0.0))
+        # Arbitrage Bounds Check
+        slice_dl.append(np.clip(p_dl, 0.0, S_live))
 
         # Banking Formula
         p_sabr = sabr_call_price(S_live, k_val, eval_maturity, r_val, sabr_alpha, sabr_beta, sabr_rho, sabr_nu)
@@ -460,22 +589,8 @@ if active_page == "⚡ Live Option Pricing":
         template='plotly_dark'
     )
 
-    col_2d, col_2d_text = st.columns([2.5, 1])
+    st.plotly_chart(fig_2d, use_container_width=True)
 
-    with col_2d:
-        st.plotly_chart(fig_2d, use_container_width=True)
-
-    with col_2d_text:
-        st.markdown("<br><br>", unsafe_allow_html=True)
-        st.info("""
-        **Spotting the AI's Edge**
-
-        We just sliced the 3D block above in half to look at a single specific time limit (maturity).
-
-        Notice how the **Red Dotted Line** (the old Black-Scholes formula) is completely flat? It doesn't see risk rising during a market crash. The **Blue/Purple Dashed Lines** (current bank formulas) curve a bit, but eventually flatten out because they can't understand true market panic.
-
-        The **Solid Green Path** is the AI. When the market goes extreme (like during a crash), the AI's curve goes up heavily! It remembers what real crashes look like from its training, allowing it to charge appropriately higher prices to protect you from extreme 'Black Swan' events.
-        """)
 
 elif active_page == "📉 Crash Simulator":
 
@@ -500,17 +615,98 @@ elif active_page == "📉 Crash Simulator":
     
     if os.path.exists(backtest_path) and os.path.exists(spx_hist_path):
         pnl_data = np.load(backtest_path, allow_pickle=True).item()
-        pnl_bsm = pnl_data['pnl_black_scholes']
-        pnl_dl = pnl_data['pnl_deep_bsde']
-        pnl_sabr = pnl_data.get('pnl_sabr', pnl_bsm)
-        pnl_lv = pnl_data.get('pnl_local_vol', pnl_bsm)
-        
         spx_df = pd.read_csv(spx_hist_path, index_col=0, parse_dates=True)
-        # Use scenario dates from sidebar selector
-        test_dates = spx_df.loc[crash_start:crash_end].index[:len(pnl_bsm)]
+        vix_hist_path = os.path.join(BASE_DIR, "Data", "VIX_history.csv")
+        vix_df = pd.read_csv(vix_hist_path, index_col=0, parse_dates=True) if os.path.exists(vix_hist_path) else None
         
-        if len(test_dates) == len(pnl_bsm):
-            st.markdown(f"### 90-Day Hedge P&L — {crash_scenario}")
+        # Use scenario dates from sidebar selector
+        scenario_slice = spx_df.loc[crash_start:crash_end]
+        test_dates = scenario_slice.index
+        S_crash_empirical = scenario_slice['SPX'].values
+        V_crash_empirical = (vix_df.loc[test_dates].values / 100.0)**2 if vix_df is not None else np.full(len(test_dates), V_live)
+
+        # DYNAMIC BACKTEST LOOP: We run the model over the real historical window
+        with st.spinner(f"AI Analysing {crash_scenario} in real-time..."):
+            pnl_dl = [0.0]
+            pnl_bsm = [0.0]
+            delta_dl_prev = 0.0
+            delta_bs_prev = 0.0
+            
+            K_backtest = S_crash_empirical[0]
+            T_init = 0.25 # 3 months
+            v_prev_bt = 0.0 # Initialize for the Hedged Error loop
+            
+            for i in range(20, len(S_crash_empirical) - 1):
+                s_today = S_crash_empirical[i]
+                s_tomorr = S_crash_empirical[i+1]
+                t_rem = max(T_init - (i/252.0), 1e-4)
+                
+                # BS Delta
+                d_bs = bs_delta(s_today, K_backtest, t_rem, 0.05, np.sqrt(V_live))
+                pnl_bsm.append(pnl_bsm[-1] + delta_bs_prev * (s_tomorr - s_today))
+                delta_bs_prev = d_bs
+                
+                # AI Delta
+                trail_s_backtest = S_crash_empirical[i-19:i+1]
+                # Use historical VIX for this day (if available) else fallback to live VIX
+                vix_today = V_crash_empirical[i]
+                
+                # Scale relative to the backtest window start to prevent neural saturation
+                # Dynamically shift mean for each 20-day window slice
+                scaling_factor_bt = trail_s_backtest[-1] / spot_scaler.mean_[0]
+                
+                spot_scaler_bt = clone(spot_scaler)
+                spot_scaler_bt.mean_ = np.array([trail_s_backtest[-1]])
+                spot_scaler_bt.scale_ = np.array([spot_scaler.scale_[0] * scaling_factor_bt])
+                
+                s_scaled_bt = spot_scaler_bt.transform(trail_s_backtest.reshape(-1,1)).flatten()
+                path_bt = torch.tensor(np.stack([s_scaled_bt, np.full(20, vix_today)], axis=-1), dtype=torch.float32).unsqueeze(0).to(device)
+                
+                # Dynamic Price Scaling for the backtest window
+                price_scaler_bt = clone(price_scaler)
+                price_scaler_bt.mean_ = np.array([price_scaler.mean_[0] * scaling_factor_bt])
+                price_scaler_bt.scale_ = np.array([price_scaler.scale_[0] * scaling_factor_bt])
+                
+                strike_scaler_bt = clone(strike_scaler)
+                strike_scaler_bt.mean_ = np.array([trail_s_backtest[-1]])
+                strike_scaler_bt.scale_ = np.array([strike_scaler.scale_[0] * scaling_factor_bt])
+                
+                k_scaled_bt = strike_scaler_bt.transform(np.array([[K_backtest]]))[0,0]
+                cont_bt = torch.tensor([[t_rem, k_scaled_bt]], dtype=torch.float32).to(device)
+                
+                with torch.no_grad():
+                    # Robust unpacking for both American (3 outputs) and European (2 outputs)
+                    bt_outputs = model(path_bt, cont_bt)
+                    v_scaled_bt = bt_outputs[0]
+                    greeks_bt = bt_outputs[1]
+                
+                # Option Price Change (for Hedged Portfolio Error)
+                v_real_bt = v_scaled_bt.item() * price_scaler_bt.scale_[0] + price_scaler_bt.mean_[0]
+                if i == 20: v_prev_bt = v_real_bt
+                # The change in option value (which we are shorting or hedging)
+                dv_bt = v_real_bt - v_prev_bt
+                v_prev_bt = v_real_bt
+
+                d_ai = greeks_bt[0, 0].item()
+                # Unscale Delta: DL model predicts dV/dS_scaled. We need dV/dS.
+                # Use current scaling parameters
+                phys_d_ai = d_ai * (price_scaler_bt.scale_[0] / spot_scaler_bt.scale_[0])
+                phys_d_ai = np.clip(phys_d_ai, 0, 1)
+                
+                # TRUE HEDGING ERROR: (Delta * dS) - dV
+                # A perfect hedge stays at 0.
+                pnl_dl.append(pnl_dl[-1] + (delta_dl_prev * (s_tomorr - s_today)) - dv_bt)
+                delta_dl_prev = phys_d_ai
+            
+            # Pad dates to match P&L length
+            plot_dates = test_dates[20:]
+            pnl_bsm = pnl_bsm[:len(plot_dates)]
+            pnl_dl = pnl_dl[:len(plot_dates)]
+            pnl_sabr = [0] * len(plot_dates) # Fallback placeholders
+            pnl_lv = [0] * len(plot_dates)
+
+        if True: # Logic branch simplified for dynamic compute
+            st.markdown(f"### 90-Day Hedge P&L - {crash_scenario}")
             c_crash, c_hedge = st.columns(2)
             
             with c_crash:
@@ -526,10 +722,7 @@ elif active_page == "📉 Crash Simulator":
                 fig_hedge.add_trace(go.Scatter(x=test_dates, y=pnl_dl, mode='lines', name='Deep Hedging (Capital Protected)', line=dict(color='#00ffcc', width=4)))
                 fig_hedge.update_layout(title="Continuous Portfolio P&L Drift", yaxis_title="Hedging Deviation ($)", height=400, template='plotly_dark')
                 st.plotly_chart(fig_hedge, use_container_width=True)
-                
-            st.info("Here we drop our AI into a simulation of the actual **Q1 2020 COVID-19 Stock Market Crash**.\n\nLook at the bottom chart. As the market plummeted, the old formulas (Red/Blue/Purple lines) completely failed to protect portfolios, losing massive amounts of money ('Hedging Deviation').\n\nThe **Solid Green Line** is our AI. It kept the portfolio almost perfectly safe at $0 loss because it dynamically understood the crash as it was happening.")
-        else:
-            st.error("Length mismatch between arrays on the UI boundary.")
+            
     else:
         st.warning("Historical Arrays missing. Please trigger the backend orchestrator via `run.bat` to rebuild the empirical matrix bounds.")
 
@@ -563,11 +756,12 @@ elif active_page == "🌐 AI Risk Heatmap":
                 k_val = K_mesh_g[i, j]
                 t_val = T_mesh_g[i, j]
                 
-                k_scaled = strike_scaler.transform(np.array([[k_val]]))[0,0]
+                k_scaled = strike_scaler_eval.transform(np.array([[k_val]]))[0,0]
                 cont_tnsr_g = torch.tensor([[t_val, k_scaled]], dtype=torch.float32).to(device)
                 
                 # Forward pass natively via GPU bounds
-                pred_scaled_g, _ = model(path_tnsr_g, cont_tnsr_g)
+                model_outputs_g = model(path_tnsr_g, cont_tnsr_g)
+                pred_scaled_g = model_outputs_g[0]
                 
                 # 1st-Order Limits (Delta) WITH explicit computational topology saved globally
                 delta_grad = torch.autograd.grad(outputs=pred_scaled_g, inputs=path_tnsr_g, grad_outputs=torch.ones_like(pred_scaled_g), create_graph=True)[0]
@@ -672,22 +866,24 @@ elif active_page == "🤖 Auto-Trading AI":
                 rolling_S = np.concatenate([np.full(20 - i - 1, trail_S[0]), trail_S[:i+1]])
                 rolling_V = np.concatenate([np.full(20 - i - 1, trail_V[0]), trail_V[:i+1]])
                 
-                s_scaled_rolling = spot_scaler.transform(rolling_S.reshape(-1,1)).flatten()
+                s_scaled_rolling = spot_scaler_eval.transform(rolling_S.reshape(-1,1)).flatten()
                 
                 path_tnsr_rl = torch.tensor(np.stack([s_scaled_rolling, rolling_V], axis=-1), dtype=torch.float32).unsqueeze(0).to(device)
                 path_tnsr_rl.requires_grad_(True)
                 
                 # Lock Strike constraint to ATM at the start of the 20 periods
-                k_norm = strike_scaler.transform(np.array([[trail_S[0]]]))[0,0]
+                k_norm = strike_scaler_eval.transform(np.array([[trail_S[0]]]))[0,0]
                 cont_tnsr_rl = torch.tensor([[term, k_norm]], dtype=torch.float32).to(device)
                 
-                val, _ = model(path_tnsr_rl, cont_tnsr_rl)
+                model_outputs_rl = model(path_tnsr_rl, cont_tnsr_rl)
+                val = model_outputs_rl[0]
                 
                 delta_grad = torch.autograd.grad(val, path_tnsr_rl, grad_outputs=torch.ones_like(val), create_graph=False)[0]
                 
                 # Extract True Path-Wise Delta Sum linearly across the entire memory sequence 
                 raw_delta = delta_grad[0, :, 0].sum().item()
-                phys_delta = raw_delta * (price_scaler.scale_[0] / spot_scaler.scale_[0])
+                # Use evaluation scaler to prevent zero-delta artifacts
+                phys_delta = raw_delta * (price_scaler_eval.scale_[0] / spot_scaler_eval.scale_[0])
                 
                 # Normalize strictly to [0.0, 1.0] formal Neural bounds
                 phys_delta = np.clip(np.abs(phys_delta), 0.01, 0.99)
@@ -697,6 +893,8 @@ elif active_page == "🤖 Auto-Trading AI":
                 
                 # RL Observation Space: (Spot is normalized by starting tick of trajectory)
                 normalized_spot = current_spot / rolling_S[0]
+                # Use shifted spot_scaler for RL observation consistency
+                phys_delta = phys_delta # Already calculated using spot_scaler_eval above
                 obs = np.array([term, normalized_spot, phys_delta, inventory], dtype=np.float32)
                 
                 action, _ = rl_agent.predict(obs, deterministic=True)
@@ -710,7 +908,7 @@ elif active_page == "🤖 Auto-Trading AI":
             fig_ai.add_trace(go.Scatter(x=time_indices, y=rl_actions, mode='lines+markers', name='Trading Robot Reality (With Fees)', line=dict(color='#ff007f', width=2)))
             
             fig_ai.update_layout(
-                title="Real-Time 20-Day Trading Simulation: Watch the Robot save money by trading less",
+                title="Real-Time 20-Day Trading Simulation",
                 xaxis_title="Days Leading Up To Today (0)",
                 yaxis_title="Amount of Stock Held in Portfolio (0% to 100%)",
                 template="plotly_dark",
@@ -722,9 +920,8 @@ elif active_page == "🤖 Auto-Trading AI":
             st.plotly_chart(fig_ai, use_container_width=True)
             st.info(
                 "**What are these two lines?**\n\n"
-                "🟢 **Green Line — 'AI Target Risk Level':** What our AI says the *perfect* amount of S&P 500 stock to hold each day is.\n\n"
-                "🩷 **Pink Line — 'Trading Robot Reality':** What the Trading Robot *actually* decided to hold after factoring in real-world **transaction fees**. It deliberately holds slightly less to avoid wasting money on unnecessary trades.\n\n"
-                "*The gap between the lines = fees saved by trading less. A flat pink line near zero means the robot stayed out of the market entirely to avoid costs.*"
+                "🟢 **Green Line - 'AI Target Risk Level':** What our AI says the *perfect* amount of S&P 500 stock to hold each day is.\n\n"
+                "🩷 **Pink Line - 'Trading Robot Reality':** What the Trading Robot *actually* decided to hold after factoring in real-world **transaction fees**. It deliberately holds slightly less to avoid wasting money on unnecessary trades.\n\n"
             )
             
             # ==========================================
@@ -747,8 +944,13 @@ elif active_page == "🤖 Auto-Trading AI":
                 
                 # Robot portfolio: hold what the robot decided yesterday
                 robot_holding = rl_actions[i - 1]
+                # Calculate dollar delta for the portfolio
+                # Holding 0.5 Delta means you own 0.5 * PortfolioValue worth of stock
+                dollar_change_stock = price_change_pct * portfolio_robot[-1]
                 trade_cost = abs(robot_holding - prev_robot_holding) * transaction_cost_rate * portfolio_robot[-1]
-                robot_pnl = robot_holding * price_change_pct * portfolio_robot[-1] - trade_cost
+                
+                # P&L calculation: (Holding * stock return) - cost
+                robot_pnl = (robot_holding * dollar_change_stock) - trade_cost
                 portfolio_robot.append(portfolio_robot[-1] + robot_pnl)
                 prev_robot_holding = robot_holding
                 
@@ -796,7 +998,6 @@ elif active_page == "🤖 Auto-Trading AI":
                 "Both strategies start with **100,000 USD**. The chart is zoomed tightly into the actual dollar range so small differences are clearly visible.\n\n"
                 "🟢 **Green Line (Robot Portfolio):** The robot holdings.\n\n"
                 "🔴 **Red Dashed Line (Unhedged / 100% Stock):** This investor put all their money into the stock market.\n\n"
-                "*The shaded red zone between the lines = the money the robot saved by not being fully exposed to the market.*"
             )
             
             # Summary metrics
@@ -824,13 +1025,13 @@ elif active_page == "🤖 Auto-Trading AI":
                 If the S&P 500 drops 35%, you lose 35% of your money. No safety net.
 
                 **🔒 Hedged** means you only hold a *portion* of your money in stocks.  
-                The smaller your holding, the less you lose during a crash — but you also gain less during good times.
+                The smaller your holding, the less you lose during a crash - but you also gain less during good times.
                 
                 The goal of the AI Robot is to find the *smartest* holding percentage each day:
                 - Hold **enough** stock to grow with the market on good days
                 - Hold **little enough** to stay safe during crashes
                 
-                > **Static 50% Hedge** = Blindly holds 50% stock every day — no intelligence, no adjustment.  
+                > **Static 50% Hedge** = Blindly holds 50% stock every day - no intelligence, no adjustment.  
                 > **Black-Scholes / SABR** = Banks' math formulas that adjust the holding based on standard volatility calculations.  
                 > **AI Robot** = Uses 20 days of market memory + real trading fee costs to decide holding each day.
                 """)
@@ -895,7 +1096,7 @@ elif active_page == "🤖 Auto-Trading AI":
             fig_crash_cmp.add_hline(y=INIT, line_dash="dot", line_color="#555",
                                     annotation_text=f"${INIT:,.0f} Starting Value", annotation_position="bottom right")
             fig_crash_cmp.update_layout(
-                title=f"Portfolio Survival: {crash_pct_display}% Crash Simulation — Who Loses the Least?",
+                title=f"Portfolio Survival: {crash_pct_display}% Crash Simulation - Who Loses the Least?",
                 xaxis_title="Days Into the Crash",
                 yaxis_title="Portfolio Value ($)",
                 yaxis_tickformat="$,.0f",

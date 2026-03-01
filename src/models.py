@@ -70,9 +70,58 @@ class HedgingMLP(nn.Module):
         x = torch.cat([latent_state, maturity_and_strike], dim=1)
         return self.net(x)
 
+class StoppingNetwork(nn.Module):
+    """
+    Binary classifier calculating the 'Optimal Stopping Time'.
+    Outputs a probability [0, 1] that the contract should be physically exercised
+    prematurely based on the current latent state and time-to-maturity.
+    """
+    def __init__(self, latent_dim=64, hidden_dim=64):
+        super(StoppingNetwork, self).__init__()
+        input_dim = latent_dim + 2 # Latent Path + Time + Strike
+        
+        self.net = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.Mish(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.Mish(),
+            nn.Linear(hidden_dim, 1),
+            nn.Sigmoid() # Boundary Classifier
+        )
+        
+    def forward(self, latent_state, maturity_and_strike):
+        x = torch.cat([latent_state, maturity_and_strike], dim=1)
+        return self.net(x)
+
+class AmericanDeepBSDE(nn.Module):
+    """
+    Unified Architecture for American Options.
+    Combines Path Encoding, Pricing, Hedging, and Optimal Stopping classification.
+    """
+    def __init__(self, path_input_dim=2, lstm_hidden=64, mlp_hidden=128):
+        super(AmericanDeepBSDE, self).__init__()
+        self.encoder = RoughPathEncoder(input_dim=path_input_dim, hidden_dim=lstm_hidden)
+        self.pricer  = PricerMLP(latent_dim=lstm_hidden, hidden_dim=mlp_hidden)
+        self.hedger  = HedgingMLP(latent_dim=lstm_hidden, hidden_dim=mlp_hidden)
+        self.stopper = StoppingNetwork(latent_dim=lstm_hidden, hidden_dim=64)
+        
+    def forward(self, historical_paths, contract_terms):
+        """
+        Returns:
+            price (Batch, 1): Premium
+            greeks (Batch, 2): Delta, Vega
+            stopping_prob (Batch, 1): Probability of optimal exercise
+        """
+        latent_state = self.encoder(historical_paths)
+        price = self.pricer(latent_state, contract_terms)
+        greeks = self.hedger(latent_state, contract_terms)
+        stopping_prob = self.stopper(latent_state, contract_terms)
+        
+        return price, greeks, stopping_prob
+
 class DeepBSDE_RoughVol(nn.Module):
     """
-    The unified Deep BSDE Architecture for empirical Rough Volatility pricing.
+    The unified Deep BSDE Architecture for empirical Rough Volatility pricing (European).
     """
     def __init__(self, path_input_dim=2, lstm_hidden=64, mlp_hidden=128):
         super(DeepBSDE_RoughVol, self).__init__()
