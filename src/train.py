@@ -1,3 +1,6 @@
+import os
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -5,7 +8,6 @@ import numpy as np
 import torch.nn.functional as F
 
 from src.models import DeepBSDE_RoughVol, AmericanDeepBSDE
-import os
 import pandas as pd
 from src.baselines import get_empirical_dataset
 from datetime import datetime
@@ -202,13 +204,14 @@ def train_american_model(epochs=1000, lr=1e-3):
     print("Initiating American Deep BSDE Training Sequence (Optimal Stopping)...")
     
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    model = AmericanDeepBSDE().to(device)
+    model = AmericanDeepBSDE(d_model=64).to(device)
     
     # ALWAYS load empirical Base Weights for Pricing/Hedging
     empirical_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "Data", "DeepBSDE_empirical.pth")
     if os.path.exists(empirical_path):
+         # strict=False allows loading shared Transformer weights while ignoring new MLP branches
          model.load_state_dict(torch.load(empirical_path, map_location=device), strict=False)
-         print(f"Loaded Pre-Trained Empirical Encoder/Pricer Core from {empirical_path}")
+         print(f"Loaded Pre-Trained Transformer Core from {empirical_path}")
     else:
          print("WARNING: Pre-trained empirical model not found. Training from scratch.")
          

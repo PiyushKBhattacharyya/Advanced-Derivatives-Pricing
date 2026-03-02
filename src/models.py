@@ -1,27 +1,40 @@
 import torch
 import torch.nn as nn
 
-class RoughPathEncoder(nn.Module):
+class TransformerRoughEncoder(nn.Module):
     """
-    Encodes the non-Markovian historical roughness of the S&P 500 and VIX.
-    Takes a sliding window of past (Spot, Variance) pairs and outputs a 
-    Markovian latent state summary.
+    SOTA v3: Encodes non-Markovian historical roughness using self-attention.
+    Captures multi-scale self-similarity of SPX/VIX more effectively than LSTMs.
     """
-    def __init__(self, input_dim=2, hidden_dim=64, num_layers=2):
-        super(RoughPathEncoder, self).__init__()
-        # Input: (Batch_Size, Sequence_Length, 2 features: Spot and VIX)
-        self.lstm = nn.LSTM(
-            input_size=input_dim, 
-            hidden_size=hidden_dim, 
-            num_layers=num_layers, 
-            batch_first=True
+    def __init__(self, input_dim=2, d_model=64, nhead=4, num_layers=2, seq_len=20):
+        super(TransformerRoughEncoder, self).__init__()
+        self.d_model = d_model
+        
+        # Linear projection to model dimension
+        self.input_projection = nn.Linear(input_dim, d_model)
+        
+        # Positional Encoding (Learned for short financial sequences)
+        self.pos_embedding = nn.Parameter(torch.randn(1, seq_len, d_model))
+        
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=d_model, 
+            nhead=nhead, 
+            dim_feedforward=d_model*2, 
+            dropout=0.1, 
+            batch_first=True,
+            activation="gelu"
         )
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
         
     def forward(self, x):
-        # x shape: (B, seq_len, 2)
-        _, (h_n, _) = self.lstm(x)
-        # We take the final hidden state of the top LSTM layer (shape: B, hidden_dim)
-        latent_state = h_n[-1]
+        # x shape: (B, seq_len, input_dim)
+        x = self.input_projection(x) # (B, seq_len, d_model)
+        x = x + self.pos_embedding   # Add temporal context
+        
+        x = self.transformer(x)      # (B, seq_len, d_model)
+        
+        # Global pooling (mean) to compress into a Markovian latent state
+        latent_state = x.mean(dim=1) 
         return latent_state
 
 class PricerMLP(nn.Module):
@@ -98,12 +111,12 @@ class AmericanDeepBSDE(nn.Module):
     Unified Architecture for American Options.
     Combines Path Encoding, Pricing, Hedging, and Optimal Stopping classification.
     """
-    def __init__(self, path_input_dim=2, lstm_hidden=64, mlp_hidden=128):
+    def __init__(self, path_input_dim=2, d_model=64, mlp_hidden=128):
         super(AmericanDeepBSDE, self).__init__()
-        self.encoder = RoughPathEncoder(input_dim=path_input_dim, hidden_dim=lstm_hidden)
-        self.pricer  = PricerMLP(latent_dim=lstm_hidden, hidden_dim=mlp_hidden)
-        self.hedger  = HedgingMLP(latent_dim=lstm_hidden, hidden_dim=mlp_hidden)
-        self.stopper = StoppingNetwork(latent_dim=lstm_hidden, hidden_dim=64)
+        self.encoder = TransformerRoughEncoder(input_dim=path_input_dim, d_model=d_model)
+        self.pricer  = PricerMLP(latent_dim=d_model, hidden_dim=mlp_hidden)
+        self.hedger  = HedgingMLP(latent_dim=d_model, hidden_dim=mlp_hidden)
+        self.stopper = StoppingNetwork(latent_dim=d_model, hidden_dim=64)
         
     def forward(self, historical_paths, contract_terms):
         """
@@ -123,11 +136,11 @@ class DeepBSDE_RoughVol(nn.Module):
     """
     The unified Deep BSDE Architecture for empirical Rough Volatility pricing (European).
     """
-    def __init__(self, path_input_dim=2, lstm_hidden=64, mlp_hidden=128):
+    def __init__(self, path_input_dim=2, d_model=64, mlp_hidden=128):
         super(DeepBSDE_RoughVol, self).__init__()
-        self.encoder = RoughPathEncoder(input_dim=path_input_dim, hidden_dim=lstm_hidden)
-        self.pricer = PricerMLP(latent_dim=lstm_hidden, hidden_dim=mlp_hidden)
-        self.hedger = HedgingMLP(latent_dim=lstm_hidden, hidden_dim=mlp_hidden)
+        self.encoder = TransformerRoughEncoder(input_dim=path_input_dim, d_model=d_model)
+        self.pricer = PricerMLP(latent_dim=d_model, hidden_dim=mlp_hidden)
+        self.hedger = HedgingMLP(latent_dim=d_model, hidden_dim=mlp_hidden)
         
     def forward(self, historical_paths, contract_terms):
         """
