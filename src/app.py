@@ -758,6 +758,8 @@ elif active_page == "🧪 Options Strategy Lab":
         )
         st.plotly_chart(fig_payoff, use_container_width=True)
 
+elif active_page == "📉 Crash Simulator":
+
     with st.sidebar:
         st.subheader("🕰️ Historical Scenario")
         crash_scenario = st.selectbox(
@@ -923,20 +925,33 @@ elif active_page == "🌐 AI Risk Heatmap":
                 k_scaled = strike_scaler_eval.transform(np.array([[k_val]]))[0,0]
                 cont_tnsr_g = torch.tensor([[t_val, k_scaled]], dtype=torch.float32).to(device)
                 
-                # Forward pass natively via GPU bounds
-                model_outputs_g = model(path_tnsr_g, cont_tnsr_g)
-                pred_scaled_g = model_outputs_g[0]
+                # 1st-Order Limits (Delta) - AI Sensitivity at current Spot
+                # We use a robust numerical fallback for 2nd-Order (Gamma) to avoid CPU Flash Attention errors
+                with torch.set_grad_enabled(True):
+                    model_outputs_g1 = model(path_tnsr_g, cont_tnsr_g)
+                    pred_scaled_g1 = model_outputs_g1[0]
+                    delta_grad_1 = torch.autograd.grad(outputs=pred_scaled_g1, inputs=path_tnsr_g, grad_outputs=torch.ones_like(pred_scaled_g1), create_graph=False)[0]
+                    raw_d1 = delta_grad_1[0, -1, 0].item()
                 
-                # 1st-Order Limits (Delta) WITH explicit computational topology saved globally
-                delta_grad = torch.autograd.grad(outputs=pred_scaled_g, inputs=path_tnsr_g, grad_outputs=torch.ones_like(pred_scaled_g), create_graph=True)[0]
+                # Numerical Gamma Pass: Small shift in spot price to estimate curvature (Gamma)
+                eps = 0.001 * S_live # 0.1% spot shift
+                trail_S_eps = trail_S + eps
+                s_scaled_eps = spot_scaler_eval.transform(trail_S_eps.reshape(-1,1)).flatten()
+                path_tnsr_eps = torch.tensor(np.stack([s_scaled_eps, trail_V], axis=-1), dtype=torch.float32).unsqueeze(0).to(device)
+                path_tnsr_eps.requires_grad_(True)
                 
-                # 2nd-Order Limits (Gamma) evaluating the Delta natively against Spot 
-                gamma_grad = torch.autograd.grad(outputs=delta_grad[:, -1, 0], inputs=path_tnsr_g, grad_outputs=torch.ones_like(delta_grad[:, -1, 0]), create_graph=False)[0]
+                with torch.set_grad_enabled(True):
+                    model_outputs_g2 = model(path_tnsr_eps, cont_tnsr_g)
+                    pred_scaled_g2 = model_outputs_g2[0]
+                    delta_grad_2 = torch.autograd.grad(outputs=pred_scaled_g2, inputs=path_tnsr_eps, grad_outputs=torch.ones_like(pred_scaled_g2), create_graph=False)[0]
+                    raw_d2 = delta_grad_2[0, -1, 0].item()
                 
-                # Chain rule inverse structural extraction formulas
-                raw_g = gamma_grad[0, -1, 0].item()
-                real_g = raw_g * (price_scaler.scale_[0] / (spot_scaler.scale_[0]**2))
+                # Unscale to physical Delta units
+                phys_d1 = raw_d1 * (price_scaler_eval.scale_[0] / spot_scaler_eval.scale_[0])
+                phys_d2 = raw_d2 * (price_scaler_eval.scale_[0] / spot_scaler_eval.scale_[0])
                 
+                # Curvature (Gamma) = ΔDelta / ΔSpot
+                real_g = (phys_d2 - phys_d1) / eps
                 dl_gammas[i, j] = real_g
                 
                 # Extract Institutional Gamma natively
