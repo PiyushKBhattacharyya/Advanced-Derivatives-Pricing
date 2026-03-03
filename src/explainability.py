@@ -43,7 +43,12 @@ class DeepExplainer:
         contract_terms = contract_terms.clone().detach().requires_grad_(True)
         
         # 1. Forward Pass to get Price
-        price, _ = self.model(historical_paths, contract_terms)
+        # SOTA v4.1 Unpack 3 items
+        outputs = self.model(historical_paths, contract_terms)
+        if len(outputs) == 3:
+            price, _, _ = outputs
+        else:
+            price, _ = outputs
         
         # 2. Backward Pass for Price Saliency
         price.backward(torch.ones_like(price))

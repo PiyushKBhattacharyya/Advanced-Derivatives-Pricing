@@ -156,7 +156,12 @@ def train_model(epochs=2000, lr=1e-3):
         optimizer.zero_grad()
         
         # Forward Pass
-        pred_prices, pred_greeks = model(X_train_paths, X_train_contract)
+        # SOTA v4.1 Unpack 3 items
+        outputs = model(X_train_paths, X_train_contract)
+        if len(outputs) == 3:
+            pred_prices, pred_greeks, _ = outputs
+        else:
+            pred_prices, pred_greeks = outputs
         
         # Calculate Loss explicitly against reality
         loss = bsde_empirical_loss(pred_prices, Y_train, pred_greeks)
@@ -170,7 +175,11 @@ def train_model(epochs=2000, lr=1e-3):
         # Validation Pass for Early Stopping
         model.eval()
         with torch.no_grad():
-            val_pred_prices, val_pred_greeks = model(X_val_paths, X_val_contract)
+            outputs = model(X_val_paths, X_val_contract)
+            if len(outputs) == 3:
+                val_pred_prices, val_pred_greeks, _ = outputs
+            else:
+                val_pred_prices, val_pred_greeks = outputs
             val_loss = bsde_empirical_loss(val_pred_prices, Y_val, val_pred_greeks).item()
         model.train()
         
@@ -250,7 +259,12 @@ def train_american_model(epochs=1000, lr=1e-3):
         optimizer.zero_grad()
         
         # Forward Pass (we only care about stopping_prob here)
-        _, _, stopping_prob = model(X_paths, X_contract)
+        # SOTA v4.1 Returns 4 items for American
+        outputs = model(X_paths, X_contract)
+        if len(outputs) == 4:
+            _, _, _, stopping_prob = outputs
+        else:
+            _, _, stopping_prob = outputs
         
         # Binary Cross Entropy Loss against our theoretical stopping rule
         loss = F.binary_cross_entropy(stopping_prob, target_probs_tensor)

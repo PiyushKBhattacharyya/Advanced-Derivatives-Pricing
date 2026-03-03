@@ -159,7 +159,12 @@ def run_empirical_hedging_backtest():
          cont_tnsr = torch.tensor([[T_remaining, k_scaled]], dtype=torch.float32).to(device)
          
          with torch.no_grad():
-              _, d_dl_tnsr = model(path_tnsr, cont_tnsr)
+              # SOTA v4.1: Unpack 3 items price, greeks, (drift, diff)
+              outputs = model(path_tnsr, cont_tnsr)
+              if len(outputs) == 3:
+                  _, d_dl_tnsr, _ = outputs
+              else:
+                  _, d_dl_tnsr = outputs
               
          d_dl = d_dl_tnsr.cpu().numpy()[0,0]
          
@@ -244,7 +249,11 @@ def run_synthetic_stress_test():
             k_scaled = strike_scaler.transform([[1.0]])[0,0]
             cont_tnsr = torch.tensor([[0.1, k_scaled]], dtype=torch.float32).to(device)
             
-            _, delta_tnsr = model(path_tnsr, cont_tnsr)
+            outputs = model(path_tnsr, cont_tnsr)
+            if len(outputs) == 3:
+                _, delta_tnsr, _ = outputs
+            else:
+                _, delta_tnsr = outputs
             delta = delta_tnsr.cpu().numpy()[0,0]
             
             # Simple 1-day P&L error (delta error)
