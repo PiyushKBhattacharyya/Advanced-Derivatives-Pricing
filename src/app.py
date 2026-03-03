@@ -153,7 +153,7 @@ def ping_live_market(ticker_symbol="^SPX"):
 SCALER_PATH = os.path.join(BASE_DIR, "Data", "scalers.pkl")
 
 @st.cache_resource
-def load_deep_bsde_infrastructure(is_american=False):
+def load_deep_bsde_infrastructure(is_american=False, version="v4.1"):
     model_class = AmericanDeepBSDE if is_american else DeepBSDE_RoughVol
     model = model_class().to(device)
     
@@ -291,7 +291,11 @@ trail_V = np.pad(raw_v, (max(0, 20 - len(raw_v)), 0), 'edge')
 
 # Stocks (AAPL, TSLA) = American, Indexes (^SPX) = European
 is_american = not (asset_selection.startswith("^") or asset_selection == "SPX")
-model, price_scaler, spot_scaler, strike_scaler = load_deep_bsde_infrastructure(is_american)
+model, price_scaler_eval, spot_scaler_eval, strike_scaler_eval = load_deep_bsde_infrastructure(is_american, version="v4.1")
+# For backward compatibility with some blocks
+price_scaler = price_scaler_eval
+spot_scaler = spot_scaler_eval
+strike_scaler = strike_scaler_eval
 
 # CRITICAL: Scaling Regime Check (Transfer Learning support)
 # If the spot_scaler was fitted on SPX (~5000) but we are pricing AAPL (~264),
@@ -486,7 +490,8 @@ if active_page == "⚡ Live Option Pricing":
             
             # Fetch drift/diff from a single sample
             with torch.no_grad():
-                _, _, (drift, diff) = model(path_tnsr, cont_tnsr, dt=dt_flow)
+                outputs = model(path_tnsr, cont_tnsr, dt=dt_flow)
+                drift, diff = outputs[2] # Index 2 is SDE stats for both 3 and 4 item returns
                 drift_mag = torch.norm(drift).item()
                 diff_mag = torch.norm(diff).item()
             
@@ -1134,7 +1139,8 @@ elif active_page == "🤖 Live Paper Trading Bot":
                 k_norm = strike_scaler_eval.transform(np.array([[trail_S[0]]]))[0,0]
                 cont_tnsr_rl = torch.tensor([[term, k_norm]], dtype=torch.float32).to(device)
                 
-                model_outputs_rl = model(path_tnsr_rl, cont_tnsr_rl)
+                # Evaluate price using SOTA v4.1 flow
+                model_outputs_rl = model(path_tnsr_rl, cont_tnsr_rl, dt=0.04) # Fixed 1-day step
                 val = model_outputs_rl[0]
                 
                 delta_grad = torch.autograd.grad(val, path_tnsr_rl, grad_outputs=torch.ones_like(val), create_graph=False)[0]

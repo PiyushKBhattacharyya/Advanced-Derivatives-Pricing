@@ -196,23 +196,29 @@ class AmericanDeepBSDE(nn.Module):
     def __init__(self, path_input_dim=2, d_model=64, mlp_hidden=128):
         super(AmericanDeepBSDE, self).__init__()
         self.encoder = TransformerRoughEncoder(input_dim=path_input_dim, d_model=d_model)
+        self.sde     = NeuralSDECell(latent_dim=d_model)
         self.pricer  = PricerMLP(latent_dim=d_model, hidden_dim=mlp_hidden)
         self.hedger  = HedgingMLP(latent_dim=d_model, hidden_dim=mlp_hidden)
         self.stopper = StoppingNetwork(latent_dim=d_model, hidden_dim=64)
         
-    def forward(self, historical_paths, contract_terms):
+    def forward(self, historical_paths, contract_terms, dt=0.01, mc_dropout=False):
         """
         Returns:
             price (Batch, 1): Premium
             greeks (Batch, 2): Delta, Vega
             stopping_prob (Batch, 1): Probability of optimal exercise
+            sde_stats (drift, diff): Latent dynamics
         """
         latent_state = self.encoder(historical_paths)
-        price = self.pricer(latent_state, contract_terms)
+        
+        # NSDE Latent Flow
+        latent_state, drift, diff = self.sde(latent_state, dt=dt)
+        
+        price = self.pricer(latent_state, contract_terms, mc_dropout=mc_dropout)
         greeks = self.hedger(latent_state, contract_terms)
         stopping_prob = self.stopper(latent_state, contract_terms)
         
-        return price, greeks, stopping_prob
+        return price, greeks, (drift, diff), stopping_prob
 
 class MultiAssetTransformerEncoder(nn.Module):
     """
