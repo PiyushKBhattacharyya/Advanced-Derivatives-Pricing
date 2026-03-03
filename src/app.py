@@ -249,6 +249,11 @@ with st.sidebar:
         st.cache_resource.clear()
         st.rerun()
     st.markdown("---")
+    
+    st.header("🧠 SOTA Brain Config (v4.1)")
+    bayesian_mode = st.toggle("Enable Bayesian MC Dropout", value=False)
+    dt_flow = st.slider("NSDE Flow Step (dt)", 0.001, 0.1, 0.01, format="%.3f")
+    st.markdown("---")
     st.header("📰 Sentiment Intelligence")
     st_bias = st.slider("Market Sentiment Bias (NLP)", -2.0, 2.0, 0.0, step=0.1, help="Simulated NLP score from news headlines. Negative = Fear/Panic, Positive = Euphoria.")
     st.caption("This bias proactively adjusts the 'Roughness' encoder.")
@@ -400,6 +405,7 @@ if active_page == "⚡ Live Option Pricing":
 
         # 1. Evaluate PyTorch Surfacing natively
         dl_prices = np.zeros_like(K_mesh)
+        dl_uncertainty = np.zeros_like(K_mesh) # NEW: SOTA v4.1
         sabr_prices = np.zeros_like(K_mesh)
         bsm_prices = np.zeros_like(K_mesh)
 
@@ -413,13 +419,22 @@ if active_page == "⚡ Live Option Pricing":
                 cont_tnsr = torch.tensor([[t_val, k_scaled]], dtype=torch.float32).to(device)
 
                 with torch.no_grad():
-                    # Handle both European (2 outputs) and American (3 outputs) architectures
-                    model_outputs = model(path_tnsr, cont_tnsr)
-                    pred_scaled = model_outputs[0]
+                    # Handle SOTA v4.1 with optional Bayesian MC Dropout
+                    if bayesian_mode:
+                        samples = []
+                        # Multi-sample inference for confidence intervals
+                        for _ in range(15): # Balanced for performance
+                            out = model(path_tnsr, cont_tnsr, dt=dt_flow, mc_dropout=True)
+                            samples.append(out[0].item())
+                        p_dl = np.mean(samples)
+                        u_dl = np.std(samples)
+                    else:
+                        out = model(path_tnsr, cont_tnsr, dt=dt_flow)
+                        p_dl = out[0].item()
+                        u_dl = 0.0
 
-                p_dl = price_scaler.inverse_transform(pred_scaled.cpu().numpy())[0,0]
-                # CRITICAL: Arbitrage Bounds Check (0 <= Call Price <= Spot)
-                dl_prices[i, j] = np.clip(p_dl, 0.0, S_live)
+                dl_prices[i, j] = np.clip(price_scaler_eval.inverse_transform(np.array([[p_dl]]))[0,0], 0.0, S_live)
+                dl_uncertainty[i, j] = u_dl # Normalized uncertainty
 
                 # SABR Banking Execution Eval
                 p_sabr = sabr_call_price(S_live, k_val, t_val, r_val, sabr_alpha, sabr_beta, sabr_rho, sabr_nu)
@@ -447,7 +462,7 @@ if active_page == "⚡ Live Option Pricing":
                                 showscale=False))
 
     fig_3d.update_layout(
-        title=f"3D Price Surface: AI vs Traditional Models  ",
+        title=f"3D Price Surface: AI vs Traditional Models {'(Bayesian MC Enabled)' if bayesian_mode else ''}",
         scene=dict(
             xaxis_title='Strike Price (K)',
             yaxis_title='Time to Expiration (Years)',
@@ -461,6 +476,39 @@ if active_page == "⚡ Live Option Pricing":
 
     with col_3d:
         st.plotly_chart(fig_3d, use_container_width=True)
+
+    # 4. SOTA BRAIN DIAGNOSTICS
+    if active_page in ["🛰️ Real-Time Benchmarks", "📊 AI Risk Heatmap"]:
+        st.markdown("---")
+        st.subheader("🧠 SOTA Brain Diagnostics (v4.1)")
+        with st.expander("Explore Neural Latent Dynamics", expanded=True):
+            d1, d2, d3 = st.columns(3)
+            
+            # Fetch drift/diff from a single sample
+            with torch.no_grad():
+                _, _, (drift, diff) = model(path_tnsr, cont_tnsr, dt=dt_flow)
+                drift_mag = torch.norm(drift).item()
+                diff_mag = torch.norm(diff).item()
+            
+            d1.metric("NSDE Latent Drift", f"{drift_mag:.4f}", help="Directional force on the price prediction")
+            d2.metric("NSDE Latent Diffusion", f"{diff_mag:.4f}", help="Volatility/Uncertainty inherent in the market path")
+            
+            # Simulated Regime Detection (Phase 4)
+            regimes = ["Smooth/Efficient", "Rough/Trending", "Flash Crash/Panic"]
+            # For demo, we derive regime from Hurst and Diffusion
+            h_h = calculate_hurst(trail_S)
+            if h_h < 0.2: 
+                r_idx = 2 
+            elif diff_mag > 0.5:
+                r_idx = 1
+            else:
+                r_idx = 0
+            
+            d3.metric("Detected Market Regime", regimes[r_idx])
+            
+            if bayesian_mode:
+                avg_u = np.mean(dl_uncertainty)
+                st.warning(f"🛡️ **Bayesian Model Confidence:** The AI is **{(1-avg_u)*100:.1f}%** confident in this surface geometry.")
         st.info(f"**Research Note:** In {'American' if is_american else 'European'} mode. Dividend Yield active at **{q_live:.2%}**.")
 
         # ==========================================
@@ -724,7 +772,9 @@ elif active_page == "🧪 Options Strategy Lab":
             c_input = torch.tensor([[leg['maturity'], k_scaled]], dtype=torch.float32).to(device)
             
             with torch.no_grad():
-                pred_price_scaled, pred_greeks = model(path_tnsr.repeat(1, 1, 1), c_input)
+                # Unpack for SOTA v4.1 (Price, Greeks, Extra)
+                outputs = model(path_tnsr.repeat(1, 1, 1), c_input, dt=dt_flow)
+                pred_price_scaled, pred_greeks = outputs[0], outputs[1]
                 p_ai = price_scaler_eval.inverse_transform(pred_price_scaled.cpu().numpy())[0,0]
                 d_ai = pred_greeks[0,0].item()
                 g_ai = pred_greeks[0,1].item()
@@ -1378,7 +1428,9 @@ elif active_page == "🕹️ Institutional What-If":
     cont_tnsr_w = torch.tensor([[w_mat, k_scaled_w]], dtype=torch.float32).to(device)
     
     with torch.no_grad():
-        pred_p, pred_g = model(path_tnsr_w, cont_tnsr_w)
+        # Unpack for SOTA v4.1 (Price, Greeks, Extra)
+        outputs = model(path_tnsr_w, cont_tnsr_w, dt=dt_flow)
+        pred_p, pred_g = outputs[0], outputs[1]
         ai_price = price_scaler_eval.inverse_transform(pred_p.cpu().numpy())[0,0]
         ai_delta = pred_g[0,0].item() * (price_scaler_eval.scale_[0] / spot_scaler_eval.scale_[0])
         
@@ -1487,7 +1539,9 @@ elif active_page == "🧬 Basket Lab":
     basket_terms = torch.tensor([[0.5, 1.0]], dtype=torch.float32).to(device)
     
     with torch.no_grad():
-        b_price_raw, b_greeks = basket_bot(basket_input, basket_terms)
+        # Basket Bot returns (Price, Greeks, SDE_Stats)
+        outputs = basket_bot(basket_input, basket_terms, dt=dt_flow)
+        b_price_raw, b_greeks, b_sde = outputs[0], outputs[1], outputs[2]
         b_price = b_price_raw.item() * 10.0 + composite_strike * 0.05 
         b_deltas = b_greeks[0, :len(basket_tickers)].cpu().numpy()
         

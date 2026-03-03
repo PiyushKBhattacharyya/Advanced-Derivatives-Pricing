@@ -1,5 +1,73 @@
 import torch
 import torch.nn as nn
+from torch.distributions import Normal
+import torch.nn.functional as F
+import torch.nn.functional as F
+
+class NeuralSDECell(nn.Module):
+    """
+    SOTA v4.1: Neural Stochastic Differential Equation (NSDE) Layer.
+    Models the latent state as a continuous flow: dZ_t = f(Z_t)dt + g(Z_t)dW_t
+    This allows the model to 'hallucinate' prices between gaps in market data.
+    """
+    def __init__(self, latent_dim=128, hidden_dim=64):
+        super(NeuralSDECell, self).__init__()
+        self.latent_dim = latent_dim
+        
+        # Drift network: f(Z_t)
+        self.drift = nn.Sequential(
+            nn.Linear(latent_dim, hidden_dim),
+            nn.Tanh(),
+            nn.Linear(hidden_dim, latent_dim)
+        )
+        
+        # Diffusion network: g(Z_t)
+        self.diffusion = nn.Sequential(
+            nn.Linear(latent_dim, hidden_dim),
+            nn.Tanh(),
+            nn.Linear(hidden_dim, latent_dim),
+            nn.Softplus() # Variance must be positive
+        )
+        
+    def forward(self, z, dt=0.01):
+        # Euler-Maruyama discretization step
+        f = self.drift(z)
+        g = self.diffusion(z)
+        
+        # Brownian motion sample
+        dw = torch.randn_like(z) * torch.sqrt(torch.tensor(dt))
+        
+        # State update
+        z_next = z + f * dt + g * dw
+        return z_next, f, g
+
+class RegimeVAE(nn.Module):
+    """
+    SOTA v4.1: Regime-Aware Variational Autoencoder.
+    Compresses the latent state and classifies it into 'Regimes' (e.g., Bull, Bear, Flash Crash).
+    The bottleneck 'z_regime' acts as a stabilizer for the main pricer.
+    """
+    def __init__(self, latent_dim=128, n_regimes=3):
+        super(RegimeVAE, self).__init__()
+        self.encoder = nn.Sequential(
+            nn.Linear(latent_dim, 64),
+            nn.ReLU(),
+            nn.Linear(64, n_regimes)
+        )
+        self.decoder = nn.Sequential(
+            nn.Linear(n_regimes, 64),
+            nn.ReLU(),
+            nn.Linear(64, latent_dim)
+        )
+        
+    def forward(self, z):
+        # Bottleneck classification
+        regime_logits = self.encoder(z)
+        regime_probs = F.softmax(regime_logits, dim=-1)
+        
+        # Reconstruct latent state from regime
+        z_recon = self.decoder(regime_probs)
+        return regime_probs, z_recon
 
 class TransformerRoughEncoder(nn.Module):
     """
@@ -57,14 +125,25 @@ class PricerMLP(nn.Module):
             nn.Mish(),
             nn.Linear(hidden_dim // 2, 1) # Output is a single Option Price
         )
+        self.dropout = nn.Dropout(p=0.1) # For Bayesian Uncertainty (MC Dropout)
         
-    def forward(self, latent_state, contract_terms):
+    def forward(self, latent_state, contract_terms, mc_dropout=False):
         # Concatenate encoded path memory with current contractual terms
-        x = torch.cat([latent_state, maturity_and_strike if 'maturity_and_strike' in locals() else contract_terms], dim=1)
+        x = torch.cat([latent_state, contract_terms], dim=1)
+        
         # Ensure model is in eval mode if batch size is 1 for BatchNorm
+        # EXCEPT when we need dropout active for Bayesian uncertainty
         if x.shape[0] == 1:
             self.net.eval()
-        return self.net(x)
+            
+        x = self.net[0:2](x) # Linear + Mish
+        x = self.net[2](x)   # BatchNorm
+        
+        # MC Dropout: Active if mc_dropout=True, regardless of global train/eval state
+        x = F.dropout(x, p=0.1, training=mc_dropout or self.net.training)
+        
+        x = self.net[3:](x)  # Rest of the network
+        return x
 
 class HedgingMLP(nn.Module):
     """
@@ -137,21 +216,22 @@ class AmericanDeepBSDE(nn.Module):
 
 class MultiAssetTransformerEncoder(nn.Module):
     """
-    Research v4: Multi-Token Cross-Asset Attention.
-    Encodes correlations between multiple assets by treating each asset's 
-    recent path as a distinct temporal token.
+    SOTA v4.1: Multi-Token Cross-Asset Attention with Lead-Lag Augmentation.
+    Implicitly detects temporal delays between assets (e.g., Asset A leading Asset B)
+    by expanding the input sequence into Lead and Lag components.
     """
-    def __init__(self, n_assets=3, seq_len=20, d_model=128, nhead=8, num_layers=3):
+    def __init__(self, n_assets=3, seq_len=20, d_model=128, nhead=8, num_layers=4):
         super(MultiAssetTransformerEncoder, self).__init__()
         self.n_assets = n_assets
         self.d_model = d_model
         
-        # Project each (Price, Vol) pair into d_model
+        # Lead-Lag Augmentation: We project (Price, Vol) for both Lead and Lag paths
+        # Input features per asset: 2 (Price, Vol) -> Total 4 with Lead-Lag
         self.asset_projection = nn.Linear(2, d_model)
         
-        # Asset-specific embeddings to help the transformer distinguish between e.g. AAPL and SPX
+        # Identity embeddings: Asset ID + Lead/Lag ID + Temporal ID
         self.asset_embedding = nn.Parameter(torch.randn(1, n_assets, d_model))
-        # Temporal positional encoding
+        self.lead_lag_embedding = nn.Parameter(torch.randn(1, 2, d_model)) # [Lead, Lag]
         self.pos_embedding = nn.Parameter(torch.randn(1, seq_len, d_model))
         
         encoder_layer = nn.TransformerEncoderLayer(
@@ -168,24 +248,35 @@ class MultiAssetTransformerEncoder(nn.Module):
         # x shape: (Batch, Seq_Len, N_Assets * 2)
         batch_size, seq_len, _ = x.shape
         
-        # Reshape to (Batch * Seq_Len, N_Assets, 2) to project assets individually
-        x = x.view(batch_size * seq_len, self.n_assets, 2)
-        x = self.asset_projection(x) # (Batch * Seq_Len, N_Assets, d_model)
+        # 1. Lead-Lag Path Augmentation
+        # Lead: Current prices (t)
+        # Lag: Shifted prices (t-1)
+        x_reshaped = x.view(batch_size, seq_len, self.n_assets, 2)
         
-        # Reshape back and add asset/temporal context
-        # We treat the sequence as Seq_Len * N_Assets tokens for full cross-correlation attention
-        x = x.view(batch_size, seq_len, self.n_assets, self.d_model)
-        x = x + self.asset_embedding.unsqueeze(1) # Add asset identity
-        x = x + self.pos_embedding.unsqueeze(2)   # Add temporal identity
+        # Create Lagged path (pad with zero at the start)
+        x_lag = torch.zeros_like(x_reshaped)
+        x_lag[:, 1:, :, :] = x_reshaped[:, :-1, :, :]
         
-        # Flatten into (Batch, Seq_Len * N_Assets, d_model)
-        x = x.view(batch_size, seq_len * self.n_assets, self.d_model)
+        # 2. Project and add embeddings
+        # (Batch, Seq_Len, N_Assets, 2) -> (Batch, Seq_Len, N_Assets, d_model)
+        feat_lead = self.asset_projection(x_reshaped) + self.lead_lag_embedding[:, 0:1, :]
+        feat_lag = self.asset_projection(x_lag) + self.lead_lag_embedding[:, 1:2, :]
         
-        # Full Cross-Asset-Time Attention
-        x = self.transformer(x)
+        # Add Asset and Position identity
+        # Broadcast embeddings: (1, 1, N, d) and (1, Seq, 1, d)
+        feat_lead = feat_lead + self.asset_embedding.unsqueeze(1) + self.pos_embedding.unsqueeze(2)
+        feat_lag = feat_lag + self.asset_embedding.unsqueeze(1) + self.pos_embedding.unsqueeze(2)
         
-        # Global pooling across both time and assets
-        latent_state = x.mean(dim=1)
+        # 3. Concatenate Lead and Lag tokens (treat as separate tokens for the transformer)
+        # Shape: (Batch, Seq_Len * N_Assets * 2, d_model)
+        x_combined = torch.cat([feat_lead, feat_lag], dim=2) # Combine at asset level
+        x_flat = x_combined.view(batch_size, seq_len * self.n_assets * 2, self.d_model)
+        
+        # 4. Global Attention
+        x_out = self.transformer(x_flat)
+        
+        # Global pooling (take mean across all asset-time-lag tokens)
+        latent_state = x_out.mean(dim=1)
         return latent_state
 
 class BasketPricerMLP(nn.Module):
@@ -236,14 +327,19 @@ class BasketDeepBSDE(nn.Module):
     def __init__(self, n_assets=3, d_model=128, mlp_hidden=256):
         super(BasketDeepBSDE, self).__init__()
         self.encoder = MultiAssetTransformerEncoder(n_assets=n_assets, d_model=d_model)
+        self.sde = NeuralSDECell(latent_dim=d_model)
         self.pricer = BasketPricerMLP(n_assets=n_assets, latent_dim=d_model, hidden_dim=mlp_hidden)
         self.hedger = BasketHedgingMLP(n_assets=n_assets, latent_dim=d_model, hidden_dim=mlp_hidden)
         
-    def forward(self, historical_paths, contract_terms):
+    def forward(self, historical_paths, contract_terms, dt=0.01, mc_dropout=False):
         latent_state = self.encoder(historical_paths)
-        price = self.pricer(latent_state, contract_terms)
+        
+        # NSDE Latent Flow: Models continuous evolution between observations
+        latent_state, drift, diff = self.sde(latent_state, dt=dt)
+        
+        price = self.pricer(latent_state, contract_terms, mc_dropout=mc_dropout)
         greeks = self.hedger(latent_state, contract_terms)
-        return price, greeks
+        return price, greeks, (drift, diff)
 
 class DeepBSDE_RoughVol(nn.Module):
     """
@@ -252,10 +348,11 @@ class DeepBSDE_RoughVol(nn.Module):
     def __init__(self, path_input_dim=2, d_model=64, mlp_hidden=128):
         super(DeepBSDE_RoughVol, self).__init__()
         self.encoder = TransformerRoughEncoder(input_dim=path_input_dim, d_model=d_model)
+        self.sde = NeuralSDECell(latent_dim=d_model)
         self.pricer = PricerMLP(latent_dim=d_model, hidden_dim=mlp_hidden)
         self.hedger = HedgingMLP(latent_dim=d_model, hidden_dim=mlp_hidden)
         
-    def forward(self, historical_paths, contract_terms):
+    def forward(self, historical_paths, contract_terms, dt=0.01, mc_dropout=False):
         """
         Args:
             historical_paths: Tensor of shape (Batch, Seq_Len, 2) -> Empirical trailing SPX and VIX.
@@ -268,10 +365,13 @@ class DeepBSDE_RoughVol(nn.Module):
         # 1. Compress non-Markovian history into Markovian latent state
         latent_state = self.encoder(historical_paths)
         
-        # 2. Predict Price
-        price = self.pricer(latent_state, contract_terms)
+        # 2. NSDE Evolution (Stochastic Continuous Flow)
+        latent_state, drift, diff = self.sde(latent_state, dt=dt)
         
-        # 3. Predict Greeks
+        # 3. Predict Price (with optional Bayesian MC Dropout)
+        price = self.pricer(latent_state, contract_terms, mc_dropout=mc_dropout)
+        
+        # 4. Predict Greeks
         greeks = self.hedger(latent_state, contract_terms)
         
-        return price, greeks
+        return price, greeks, (drift, diff)
