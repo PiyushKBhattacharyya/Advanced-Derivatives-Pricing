@@ -45,12 +45,19 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 @st.cache_data(ttl=300) # Only cache historical matrices natively to prevent Yahoo Rate-Limits (5 min)
 def fetch_yahoo_history(ticker_symbol="^SPX"):
     try:
-        spx_hist = yf.Ticker(ticker_symbol).history(period="1mo")['Close']
-        vix_hist = yf.Ticker("^VIX").history(period="1mo")['Close']
-        intraday = yf.Ticker(ticker_symbol).history(period="1d", interval="5m")
-        if spx_hist.empty or vix_hist.empty:
+        spx = yf.Ticker(ticker_symbol).history(period="1mo")['Close']
+        vix = yf.Ticker("^VIX").history(period="1mo")['Close']
+        if spx.empty or vix.empty:
             raise ValueError("Empty data returned from Yahoo Finance")
-        return spx_hist, vix_hist, intraday
+        
+        # Align indices to ensure same shape
+        combined = pd.concat([spx, vix], axis=1, join='inner')
+        combined.columns = ['S', 'V']
+        spx_history = combined['S']
+        vix_history = combined['V']
+        
+        intraday = yf.Ticker(ticker_symbol).history(period="1d", interval="5m")
+        return spx_history, vix_history, intraday
     except Exception as e:
         # Yahoo Finance rate-limited or unavailable - fall back to synthetic data
         # so the dashboard stays online and functional for demos.
@@ -183,6 +190,9 @@ sim_crash_severity = 0.35
 if 'asset_selection' not in st.session_state:
     st.session_state.asset_selection = "^SPX"
 
+if 'strategy_legs' not in st.session_state:
+    st.session_state.strategy_legs = []
+
 asset_selection = st.session_state.asset_selection
 sim_transaction_cost = 0.0002
 sim_crash_severity = 0.35
@@ -192,9 +202,9 @@ if 'active_tab' not in st.session_state:
 
 # ── PANE-DRIVEN NAVIGATION (Top Bar) ──────────────────
 st.markdown("### 🗺️ Select Analysis Pane")
-c1, c2, c3, c4 = st.columns(4)
-nav_pages = ["⚡ Live Option Pricing", "📉 Crash Simulator", "🌐 AI Risk Heatmap", "🤖 Auto-Trading AI"]
-for i, (col, page) in enumerate(zip([c1, c2, c3, c4], nav_pages)):
+c1, c2, c3, c4, c5, c6 = st.columns(6)
+nav_pages = ["⚡ Live Option Pricing", "🧪 Options Strategy Lab", "🤖 Live Paper Trading Bot", "📉 Crash Simulator", "🌐 AI Risk Heatmap", "🕹️ Institutional What-If"]
+for i, (col, page) in enumerate(zip([c1, c2, c3, c4, c5, c6], nav_pages)):
     btn_type = "primary" if st.session_state.active_tab == page else "secondary"
     if col.button(page, use_container_width=True, type=btn_type, key=f"nav_{i}"):
         st.session_state.active_tab = page
@@ -222,6 +232,10 @@ with st.sidebar:
         st.cache_resource.clear()
         st.rerun()
     st.markdown("---")
+    st.header("📰 Sentiment Intelligence")
+    st_bias = st.slider("Market Sentiment Bias (NLP)", -2.0, 2.0, 0.0, step=0.1, help="Simulated NLP score from news headlines. Negative = Fear/Panic, Positive = Euphoria.")
+    st.caption("This bias proactively adjusts the 'Roughness' encoder.")
+    st.markdown("---")
 
 # (Sidebar Injection for the active page is handled inside the page blocks below)
 
@@ -234,6 +248,12 @@ if S_live is None:
 
 # ── AI INFRASTRUCTURE (Global) ──────────────────
 # Phase 15: Automatic Style Enforcement
+# Ensure strictly 20 days for Transformer sequence (pad if Yahoo returns < 20)
+raw_s = trail_S
+raw_v = trail_V
+trail_S = np.pad(raw_s, (max(0, 20 - len(raw_s)), 0), 'edge')
+trail_V = np.pad(raw_v, (max(0, 20 - len(raw_v)), 0), 'edge')
+
 # Stocks (AAPL, TSLA) = American, Indexes (^SPX) = European
 is_american = not (asset_selection.startswith("^") or asset_selection == "SPX")
 model, price_scaler, spot_scaler, strike_scaler = load_deep_bsde_infrastructure(is_american)
@@ -270,7 +290,12 @@ except:
     price_scaler_eval = price_scaler
     strike_scaler_eval = strike_scaler
 
-path_tnsr = torch.tensor(np.stack([s_scaled, trail_V], axis=-1), dtype=torch.float32).unsqueeze(0).to(device)
+# Apply Sentiment-Driven Volatility Overlay
+# Negative sentiment (Panic) increases the variance fed to the Transformer proactively.
+sentiment_variance_shift = - (st_bias * 0.0005) # ~ 5bp shift per point of bias
+trail_V_sentiment = np.clip(trail_V + sentiment_variance_shift, 0.0001, 0.25)
+
+path_tnsr = torch.tensor(np.stack([s_scaled, trail_V_sentiment], axis=-1), dtype=torch.float32).unsqueeze(0).to(device)
 
 
 if active_page == "⚡ Live Option Pricing":
@@ -594,7 +619,144 @@ if active_page == "⚡ Live Option Pricing":
     st.plotly_chart(fig_2d, use_container_width=True)
 
 
-elif active_page == "📉 Crash Simulator":
+elif active_page == "🧪 Options Strategy Lab":
+    st.subheader("🧪 Options Strategy Laboratory")
+    st.markdown("""
+    Construct complex multi-leg portfolios and analyze their aggregate risk profile 
+    through the lens of **Transformer-Rough Volatility**.
+    """)
+    
+    with st.sidebar:
+        st.subheader("➕ Add Strategy Leg")
+        l_type = st.selectbox("Leg Type", ["Call", "Put"])
+        l_side = st.selectbox("Side", ["Buy", "Sell"])
+        l_strike = st.number_input("Strike Price", value=float(round(S_live, -1)), step=10.0)
+        l_mat = st.slider("Maturity (Years)", 0.05, 2.0, 0.5, step=0.01)
+        l_qty = st.number_input("Quantity", value=1, min_value=1)
+        
+        if st.button("Add Leg to Strategy", use_container_width=True):
+            st.session_state.strategy_legs.append({
+                "type": l_type,
+                "side": l_side,
+                "strike": l_strike,
+                "maturity": l_mat,
+                "quantity": l_qty
+            })
+            st.rerun()
+            
+        if st.session_state.strategy_legs:
+            if st.button("🗑️ Clear Strategy", type="primary", use_container_width=True):
+                st.session_state.strategy_legs = []
+                st.rerun()
+
+    if not st.session_state.strategy_legs:
+        st.info("Your strategy is empty. Use the sidebar to add option legs (e.g., a Call and a Put for a Straddle).")
+        
+        # Default inspiration
+        st.markdown("#### � Strategy Templates")
+        t1, t2, t3 = st.columns(3)
+        if t1.button("Load Bull Call Spread", use_container_width=True):
+            st.session_state.strategy_legs = [
+                {"type": "Call", "side": "Buy", "strike": round(S_live, -1), "maturity": 0.25, "quantity": 1},
+                {"type": "Call", "side": "Sell", "strike": round(S_live, -1) + 100, "maturity": 0.25, "quantity": 1}
+            ]
+            st.rerun()
+        if t2.button("Load Neutral Straddle", use_container_width=True):
+            st.session_state.strategy_legs = [
+                {"type": "Call", "side": "Buy", "strike": round(S_live, -1), "maturity": 0.25, "quantity": 1},
+                {"type": "Put", "side": "Buy", "strike": round(S_live, -1), "maturity": 0.25, "quantity": 1}
+            ]
+            st.rerun()
+        if t3.button("Load Iron Condor", use_container_width=True):
+            st.session_state.strategy_legs = [
+                {"type": "Put", "side": "Sell", "strike": round(S_live, -1) - 200, "maturity": 0.25, "quantity": 1},
+                {"type": "Put", "side": "Buy", "strike": round(S_live, -1) - 300, "maturity": 0.25, "quantity": 1},
+                {"type": "Call", "side": "Sell", "strike": round(S_live, -1) + 200, "maturity": 0.25, "quantity": 1},
+                {"type": "Call", "side": "Buy", "strike": round(S_live, -1) + 300, "maturity": 0.25, "quantity": 1}
+            ]
+            st.rerun()
+    else:
+        # Display current legs
+        st.markdown("### 📝 Current Strategy Legs")
+        leg_df = pd.DataFrame(st.session_state.strategy_legs)
+        st.table(leg_df)
+        
+        # Calculate Unified Risk
+        total_ai_price = 0.0
+        total_delta = 0.0
+        total_gamma = 0.0
+        
+        # We'll also calculate traditional benchmark for comparison
+        total_bs_price = 0.0
+        
+        for leg in st.session_state.strategy_legs:
+            k_scaled = strike_scaler_eval.transform(np.array([[leg['strike']]]))[0,0]
+            c_input = torch.tensor([[leg['maturity'], k_scaled]], dtype=torch.float32).to(device)
+            
+            with torch.no_grad():
+                pred_price_scaled, pred_greeks = model(path_tnsr.repeat(1, 1, 1), c_input)
+                p_ai = price_scaler_eval.inverse_transform(pred_price_scaled.cpu().numpy())[0,0]
+                d_ai = pred_greeks[0,0].item()
+                g_ai = pred_greeks[0,1].item()
+            
+            mult = 1 if leg['side'] == "Buy" else -1
+            q = leg['quantity']
+            
+            if leg['type'] == "Put":
+                # Put-Call Parity: P = C - S + K*e^(-rT)
+                p_ai = p_ai - S_live + leg['strike'] * np.exp(-r_val * leg['maturity'])
+                d_ai = d_ai - 1.0 
+            
+            total_ai_price += p_ai * mult * q
+            total_delta += d_ai * mult * q
+            total_gamma += g_ai * mult * q
+            
+            # BS Comparison
+            p_bs = black_scholes_call(S_live, leg['strike'], leg['maturity'], r_val, np.sqrt(V_live) * bsm_vol_mult)
+            if leg['type'] == "Put":
+                 p_bs = p_bs - S_live + leg['strike'] * np.exp(-r_val * leg['maturity'])
+            total_bs_price += p_bs * mult * q
+
+        # Layout metrics
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Net AI Strategy Value", f"${total_ai_price:,.2f}", f"{total_ai_price - total_bs_price:,.2f} vs BS")
+        m2.metric("Portfolio Delta", f"{total_delta:.4f}")
+        m3.metric("Portfolio Gamma", f"{total_gamma:.6f}")
+        m4.metric("Market-Roughness Alpha", "Transformer Ready")
+
+        st.markdown("---")
+        
+        # Payoff Diagram at Maturity
+        st.markdown("### 📊 Strategy Payoff Diagram (at Maturity)")
+        x_range = np.linspace(S_live * 0.7, S_live * 1.3, 100)
+        payoff = np.zeros_like(x_range)
+        
+        for leg in st.session_state.strategy_legs:
+            mult = 1 if leg['side'] == "Buy" else -1
+            q = leg['quantity']
+            if leg['type'] == "Call":
+                payoff += mult * q * np.maximum(x_range - leg['strike'], 0)
+            else:
+                payoff += mult * q * np.maximum(leg['strike'] - x_range, 0)
+        
+        # Net Payoff (Profit = Payoff - Net Cost)
+        profit = payoff - total_ai_price
+        
+        fig_payoff = go.Figure()
+        fig_payoff.add_trace(go.Scatter(x=x_range, y=profit, mode='lines', 
+                                       line=dict(color='#00ffcc', width=4), fill='tozeroy',
+                                       name='Net Profit/Loss'))
+        fig_payoff.add_hline(y=0, line_dash="dash", line_color="white")
+        fig_payoff.add_vline(x=S_live, line_dash="dot", line_color="yellow", annotation_text="Current Spot")
+        
+        fig_payoff.update_layout(
+            title="Aggregated Strategy Profit Profile (Maturity View)",
+            xaxis_title="Spot Price at Maturity ($)",
+            yaxis_title="Net Profit/Loss ($)",
+            template="plotly_dark",
+            height=500
+        )
+        st.plotly_chart(fig_payoff, use_container_width=True)
 
     with st.sidebar:
         st.subheader("🕰️ Historical Scenario")
@@ -807,7 +969,7 @@ elif active_page == "🌐 AI Risk Heatmap":
 # ==========================================
 # 6. PAGE 4: REINFORCEMENT LEARNING EXECUTION
 # ==========================================
-elif active_page == "🤖 Auto-Trading AI":
+elif active_page == "🤖 Live Paper Trading Bot":
     with st.sidebar:
         st.subheader("💼 Trading Simulation")
         sim_portfolio_size = st.number_input(
@@ -1003,12 +1165,21 @@ elif active_page == "🤖 Auto-Trading AI":
             )
             
             # Summary metrics
+            robot_returns_series = np.diff(portfolio_robot) / portfolio_robot[:-1]
+            robot_vol = np.std(robot_returns_series) * np.sqrt(252) * 100 # Annualized Vol
+            sharpe = (np.mean(robot_returns_series) / np.std(robot_returns_series)) * np.sqrt(252) if np.std(robot_returns_series) > 0 else 0
+            
             robot_return = (portfolio_robot[-1] - PORTFOLIO_START) / PORTFOLIO_START * 100
             unhedged_return = (portfolio_unhedged[-1] - PORTFOLIO_START) / PORTFOLIO_START * 100
-            col_m1, col_m2, col_m3 = st.columns(3)
-            col_m1.metric("Robot Final Value", f"${portfolio_robot[-1]:,.0f}", f"{robot_return:+.2f}%")
-            col_m2.metric("Unhedged Final Value", f"${portfolio_unhedged[-1]:,.0f}", f"{unhedged_return:+.2f}%")
-            col_m3.metric("Capital Saved vs Unhedged", f"${portfolio_robot[-1] - portfolio_unhedged[-1]:+,.0f}")
+            
+            st.markdown("#### 📈 Performance Analytics")
+            col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+            col_m1.metric("Robot Return", f"{robot_return:+.2f}%", f"${portfolio_robot[-1]:,.0f}")
+            col_m2.metric("Market Return", f"{unhedged_return:+.2f}%", f"${portfolio_unhedged[-1]:,.0f}")
+            col_m3.metric("Annualized Vol", f"{robot_vol:.1f}%")
+            col_m4.metric("Sharpe Ratio", f"{sharpe:.2f}")
+            
+            st.metric("Alpha Generated (vs Unhedged)", f"{robot_return - unhedged_return:+.4f}%")
             
             # ==========================================
             # CRASH SCENARIO vs INDUSTRY BASELINES
@@ -1117,3 +1288,80 @@ elif active_page == "🤖 Auto-Trading AI":
                 final_val = crash_portfolios[name][-1]
                 loss = final_val - INIT
                 col.metric(name.split("(")[0].strip(), f"${final_val:,.0f}", f"{loss:+,.0f}")
+
+elif active_page == "🕹️ Institutional What-If":
+    st.subheader("🕹️ Institutional What-If Stress Panel")
+    st.markdown("""
+    Take direct control of the market. Manually override Spot prices and Volatility 
+    to see exactly how the **Transformer-Rough Volatility** model reacts to extreme shocks.
+    """)
+    
+    with st.sidebar:
+        st.subheader("🕹️ Manual Shocks")
+        override_spot_pct = st.slider("Spot Price Shift (%)", -50, 50, 0, step=1, key="shock_spot")
+        override_vix_pct = st.slider("VIX Multiplier (%)", -50, 200, 0, step=5, key="shock_vix")
+        
+        st.markdown("---")
+        st.subheader("📜 Contract Setup")
+        w_strike = st.number_input("Target Strike", value=float(round(S_live, -1)), step=10.0)
+        w_mat = st.slider("Target Maturity", 0.05, 2.0, 0.5, step=0.01)
+
+    # Calculate Shocked Values
+    S_shock = S_live * (1 + override_spot_pct / 100)
+    V_shock = V_live * (1 + override_vix_pct / 100)
+    
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Shocked Spot Price", f"${S_shock:,.2f}", f"{override_spot_pct:+d}%")
+    col2.metric("Shocked VIX", f"{np.sqrt(V_shock)*100:.2f}%", f"{override_vix_pct:+d}%")
+    col3.metric("Eval Maturity", f"{w_mat:.2f}Y")
+
+    st.markdown("---")
+    
+    # Calculate AI vs Classic under SHOCK
+    # We need to re-scale the path to reflect the spot shock for the Transformer memory
+    trail_S_shock = trail_S * (1 + override_spot_pct / 100)
+    trail_V_shock = trail_V * (1 + override_vix_pct / 100)
+    
+    s_scaled_w = spot_scaler_eval.transform(trail_S_shock.reshape(-1,1)).flatten()
+    path_tnsr_w = torch.tensor(np.stack([s_scaled_w, trail_V_shock], axis=-1), dtype=torch.float32).unsqueeze(0).to(device)
+    k_scaled_w = strike_scaler_eval.transform(np.array([[w_strike]]))[0,0]
+    cont_tnsr_w = torch.tensor([[w_mat, k_scaled_w]], dtype=torch.float32).to(device)
+    
+    with torch.no_grad():
+        pred_p, pred_g = model(path_tnsr_w, cont_tnsr_w)
+        ai_price = price_scaler_eval.inverse_transform(pred_p.cpu().numpy())[0,0]
+        ai_delta = pred_g[0,0].item() * (price_scaler_eval.scale_[0] / spot_scaler_eval.scale_[0])
+        
+    # Standard Benchmark
+    bs_price = black_scholes_call(S_shock, w_strike, w_mat, r_val, np.sqrt(V_shock) * bsm_vol_mult)
+    bs_delta_val = bs_delta(S_shock, w_strike, w_mat, r_val, np.sqrt(V_shock) * bsm_vol_mult)
+    
+    c_p, c_d = st.columns(2)
+    
+    with c_p:
+        st.markdown("#### 💰 Price Multi-Model Comparison")
+        fig_p = go.Figure(go.Bar(
+            x=['Deep BSDE (AI)', 'Black-Scholes (Bank)'],
+            y=[ai_price, bs_price],
+            marker_color=['#00ffcc', '#ff3333']
+        ))
+        fig_p.update_layout(template="plotly_dark", height=350, yaxis_title="Option Value ($)")
+        st.plotly_chart(fig_p, use_container_width=True)
+        
+    with c_d:
+        st.markdown("#### 📐 Delta (Hedging Requirement)")
+        fig_d = go.Figure(go.Bar(
+            x=['AI Sensitivity', 'Classic Sensitivity'],
+            y=[ai_delta, bs_delta_val],
+            marker_color=['#00ffcc', '#ff3333']
+        ))
+        fig_d.update_layout(template="plotly_dark", height=350, yaxis_title="Delta (Shares per Contract)")
+        st.plotly_chart(fig_d, use_container_width=True)
+
+    st.info(f"""
+    **🔍 Shock Analysis:**
+    Under a **{override_spot_pct}%** spot move and **{override_vix_pct}%** volatility spike:
+    - The AI is pricing this option at **${ai_price:.2f}**.
+    - The Traditional Model says it should be **${bs_price:.2f}**.
+    - The difference (**${ai_price - bs_price:+.2f}**) is the 'Rough Alpha' captured by the Transformer's memory of recent path jaggedness.
+    """)
