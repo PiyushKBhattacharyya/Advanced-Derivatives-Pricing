@@ -58,9 +58,12 @@ class PricerMLP(nn.Module):
             nn.Linear(hidden_dim // 2, 1) # Output is a single Option Price
         )
         
-    def forward(self, latent_state, maturity_and_strike):
+    def forward(self, latent_state, contract_terms):
         # Concatenate encoded path memory with current contractual terms
-        x = torch.cat([latent_state, maturity_and_strike], dim=1)
+        x = torch.cat([latent_state, maturity_and_strike if 'maturity_and_strike' in locals() else contract_terms], dim=1)
+        # Ensure model is in eval mode if batch size is 1 for BatchNorm
+        if x.shape[0] == 1:
+            self.net.eval()
         return self.net(x)
 
 class HedgingMLP(nn.Module):
@@ -131,6 +134,116 @@ class AmericanDeepBSDE(nn.Module):
         stopping_prob = self.stopper(latent_state, contract_terms)
         
         return price, greeks, stopping_prob
+
+class MultiAssetTransformerEncoder(nn.Module):
+    """
+    Research v4: Multi-Token Cross-Asset Attention.
+    Encodes correlations between multiple assets by treating each asset's 
+    recent path as a distinct temporal token.
+    """
+    def __init__(self, n_assets=3, seq_len=20, d_model=128, nhead=8, num_layers=3):
+        super(MultiAssetTransformerEncoder, self).__init__()
+        self.n_assets = n_assets
+        self.d_model = d_model
+        
+        # Project each (Price, Vol) pair into d_model
+        self.asset_projection = nn.Linear(2, d_model)
+        
+        # Asset-specific embeddings to help the transformer distinguish between e.g. AAPL and SPX
+        self.asset_embedding = nn.Parameter(torch.randn(1, n_assets, d_model))
+        # Temporal positional encoding
+        self.pos_embedding = nn.Parameter(torch.randn(1, seq_len, d_model))
+        
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=d_model, 
+            nhead=nhead, 
+            dim_feedforward=d_model*4, 
+            dropout=0.1, 
+            batch_first=True,
+            activation="gelu"
+        )
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        
+    def forward(self, x):
+        # x shape: (Batch, Seq_Len, N_Assets * 2)
+        batch_size, seq_len, _ = x.shape
+        
+        # Reshape to (Batch * Seq_Len, N_Assets, 2) to project assets individually
+        x = x.view(batch_size * seq_len, self.n_assets, 2)
+        x = self.asset_projection(x) # (Batch * Seq_Len, N_Assets, d_model)
+        
+        # Reshape back and add asset/temporal context
+        # We treat the sequence as Seq_Len * N_Assets tokens for full cross-correlation attention
+        x = x.view(batch_size, seq_len, self.n_assets, self.d_model)
+        x = x + self.asset_embedding.unsqueeze(1) # Add asset identity
+        x = x + self.pos_embedding.unsqueeze(2)   # Add temporal identity
+        
+        # Flatten into (Batch, Seq_Len * N_Assets, d_model)
+        x = x.view(batch_size, seq_len * self.n_assets, self.d_model)
+        
+        # Full Cross-Asset-Time Attention
+        x = self.transformer(x)
+        
+        # Global pooling across both time and assets
+        latent_state = x.mean(dim=1)
+        return latent_state
+
+class BasketPricerMLP(nn.Module):
+    def __init__(self, n_assets=3, latent_dim=128, hidden_dim=256):
+        super(BasketPricerMLP, self).__init__()
+        # Input: Latent state + Maturity + N_Asset Weights (optional) + Strike
+        input_dim = latent_dim + 2 
+        
+        self.net = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.Mish(),
+            nn.BatchNorm1d(hidden_dim),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.Mish(),
+            nn.Linear(hidden_dim, 1)
+        )
+        
+    def forward(self, latent_state, contract_terms):
+        x = torch.cat([latent_state, contract_terms], dim=1)
+        if x.shape[0] == 1:
+            self.net.eval()
+        return self.net(x)
+
+class BasketHedgingMLP(nn.Module):
+    def __init__(self, n_assets=3, latent_dim=128, hidden_dim=256):
+        super(BasketHedgingMLP, self).__init__()
+        input_dim = latent_dim + 2
+        
+        self.net = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.Mish(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.Mish(),
+            nn.Linear(hidden_dim, n_assets + 1) # Output: [Delta1, Delta2, ..., DeltaN, BasketVega]
+        )
+        
+    def forward(self, latent_state, contract_terms):
+        x = torch.cat([latent_state, contract_terms], dim=1)
+        if x.shape[0] == 1:
+            self.net.eval()
+        return self.net(x)
+
+class BasketDeepBSDE(nn.Module):
+    """
+    SOTA v4: Multi-Asset Basket Option Pricing Engine.
+    Quotes weights for N assets simultaneously while considering cross-correlation.
+    """
+    def __init__(self, n_assets=3, d_model=128, mlp_hidden=256):
+        super(BasketDeepBSDE, self).__init__()
+        self.encoder = MultiAssetTransformerEncoder(n_assets=n_assets, d_model=d_model)
+        self.pricer = BasketPricerMLP(n_assets=n_assets, latent_dim=d_model, hidden_dim=mlp_hidden)
+        self.hedger = BasketHedgingMLP(n_assets=n_assets, latent_dim=d_model, hidden_dim=mlp_hidden)
+        
+    def forward(self, historical_paths, contract_terms):
+        latent_state = self.encoder(historical_paths)
+        price = self.pricer(latent_state, contract_terms)
+        greeks = self.hedger(latent_state, contract_terms)
+        return price, greeks
 
 class DeepBSDE_RoughVol(nn.Module):
     """
